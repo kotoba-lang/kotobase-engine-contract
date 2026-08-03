@@ -28,29 +28,35 @@
   {:candidate/id :prolly-engine
    :engine/storage-model :prolly
    :role :candidate
-   :status :correctness-baseline
+   :status :r2-workload-baseline
    :passed [:semantic-conformance :typed-value-roundtrip
             :object-store-restore :idempotency-after-restore
             :memory-differential :cas-publication
             :cljs-direct-async-cursor :range-pruned-point-read
             :incremental-assertion-write :incremental-retraction-write
-            :mixed-delta-cid-equivalence :async-mutation-write-await]
-   :evidence {:dataset-datoms 2001 :stored-blocks 40
+            :mixed-delta-cid-equivalence :async-mutation-write-await
+            :cold-writer-target-leaf-prefetch :r2-cold-mixed-write
+            :r2-linearizable-cas :r2-second-process-reopen]
+   :evidence {:dataset-datoms 4001 :stored-blocks 48
               :point-read-block-requests 4
+              :cold-mixed-write-block-requests 11
               :single-assertion-delta-block-writes 8
               :mixed-40-change-block-writes 18
               :equivalent-full-snapshot-block-writes 32}
-   :blockers [:cold-writer-prefetch :s3-r2-workload-benchmark
-              :performance-evidence-incomplete]}
+   :blockers [:production-latency-distribution
+              :production-workload-performance-evidence-incomplete]
+   :default-eligible false
+   :note "Eligible for shadow traffic, not production default selection: request amplification is bounded on real R2 semantics, but p50/p99 and restore-throughput evidence are not yet production-shaped."}
   {:candidate/id :merkle-lsm-engine
    :engine/storage-model :merkle-lsm
    :role :candidate
    :status :jvm-correctness-baseline
    :passed [:semantic-conformance :typed-value-roundtrip
             :memory-differential :object-store-restore
-            :retraction-mvcc]
+            :retraction-mvcc :safe-epoch-zero-l0-compaction]
    :blockers [:async-provider-reader :range-pruned-run-selection
-              :compaction-host-wiring :performance-evidence-incomplete]}
+              :reader-pin-safe-epoch-advancement
+              :performance-evidence-incomplete]}
   {:candidate/id :lsm-prolly-checkpoint-engine
    :engine/storage-model :lsm-prolly-checkpoint
    :role :candidate

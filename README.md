@@ -40,6 +40,10 @@ conformance runner composes all forms.
 Semantic PASS alone does not select a default. `kotobase.engine.qualification`
 adds independent resilience and workload-specific performance evidence gates;
 the initial candidate inventory is in `docs/qualification-matrix.edn`. The
+Prolly candidate has passed manifest-only cold mutation and second-process
+reopen against real R2 semantics and is ready for server shadow traffic. It is
+not yet the production default: production latency distributions and restore
+throughput remain required evidence. The
 legacy peer Prolly path remains a compatibility baseline because it currently
 stringifies every non-Link Datom position and therefore cannot yet claim typed
 Datom round-trip conformance.
