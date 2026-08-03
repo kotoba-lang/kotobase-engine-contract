@@ -64,6 +64,18 @@ Filecoin/FEVM are not engine profiles. `kotobase.engine.archive` models them as
 asynchronous archive and anchor lifecycles outside the foreground commit/query
 path.
 
+## Operation layers
+
+`kotobase.engine.surface` is the authoritative layer classifier for the public
+surface. It distinguishes primitive engine state, storage-independent semantic
+queries, provider diagnostics, projections, archives, and anchors.
+
+In particular, `dbStats` is provider diagnostics and `view` is a projection
+operation. Neither is a portable IEngine read or a cross-engine promotion
+gate. A projection implementation must version its definition and source
+commit barrier independently; FEVM anchoring remains asynchronous and cannot
+be inserted into the foreground database path.
+
 ## Verification
 
 ```sh
