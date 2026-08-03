@@ -36,10 +36,13 @@
             :incremental-assertion-write :incremental-retraction-write
             :mixed-delta-cid-equivalence :async-mutation-write-await
             :cold-writer-target-leaf-prefetch :r2-cold-mixed-write
-            :r2-linearizable-cas :r2-second-process-reopen]
+            :r2-linearizable-cas :r2-second-process-reopen
+            :post-upload-pre-cas-crash-isolation
+            :fresh-process-same-request-retry]
    :evidence {:dataset-datoms 4001 :stored-blocks 48
               :point-read-block-requests 4
               :cold-mixed-write-block-requests 11
+              :crash-recovery-head-preserved true
               :single-assertion-delta-block-writes 8
               :mixed-40-change-block-writes 18
               :equivalent-full-snapshot-block-writes 32}
