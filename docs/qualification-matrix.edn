@@ -53,8 +53,13 @@
    :status :jvm-correctness-baseline
    :passed [:semantic-conformance :typed-value-roundtrip
             :memory-differential :object-store-restore
-            :retraction-mvcc :safe-epoch-zero-l0-compaction]
-   :blockers [:async-provider-reader :range-pruned-run-selection
+            :retraction-mvcc :safe-epoch-zero-l0-compaction
+            :manifest-only-lazy-restore :range-pruned-run-selection
+            :mixed-cold-transaction]
+   :evidence {:restore-block-requests 2
+              :point-read-selected-runs 3
+              :point-read-total-eavt-runs 13}
+   :blockers [:async-cljs-provider-coordinator
               :reader-pin-safe-epoch-advancement
               :performance-evidence-incomplete]}
   {:candidate/id :lsm-prolly-checkpoint-engine
