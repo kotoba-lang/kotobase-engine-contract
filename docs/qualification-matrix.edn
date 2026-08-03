@@ -53,18 +53,24 @@
   {:candidate/id :merkle-lsm-engine
    :engine/storage-model :merkle-lsm
    :role :candidate
-   :status :jvm-correctness-baseline
+   :status :cljs-provider-baseline
    :passed [:semantic-conformance :typed-value-roundtrip
             :memory-differential :object-store-restore
             :retraction-mvcc :safe-epoch-zero-l0-compaction
             :manifest-only-lazy-restore :range-pruned-run-selection
-            :mixed-cold-transaction]
+            :mixed-cold-transaction :reader-pin-safe-epoch-advancement
+            :safe-epoch-manifest-roundtrip :cljs-async-provider-coordinator
+            :cljs-upload-before-cas :cljs-stale-writer-conflict
+            :cljs-cid-mismatch-fails-closed]
    :evidence {:restore-block-requests 2
               :point-read-selected-runs 3
-              :point-read-total-eavt-runs 13}
-   :blockers [:async-cljs-provider-coordinator
-              :reader-pin-safe-epoch-advancement
-              :performance-evidence-incomplete]}
+              :point-read-total-eavt-runs 13
+              :cljs-point-read-block-requests 6
+              :cljs-stored-blocks 50
+              :reader-pin-safe-epoch-persisted true}
+   :blockers [:performance-evidence-incomplete]
+   :default-eligible false
+   :note "JVM and CLJS provider correctness gates are closed. Candidate may enter sampled shadow traffic; production-shaped p50/p99, write amplification, compaction and restore throughput remain required before default selection."}
   {:candidate/id :lsm-prolly-checkpoint-engine
    :engine/storage-model :lsm-prolly-checkpoint
    :role :candidate
