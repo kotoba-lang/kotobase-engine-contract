@@ -1,0 +1,11 @@
+{
+  "name": "kotobase-engine-contract",
+  "private": true,
+  "scripts": {
+    "test:cljs": "nbb test/run.cljs"
+  },
+  "devDependencies": {
+    "nbb": "^1.4.208"
+  }
+}
+
