@@ -4,6 +4,7 @@
 
 (deftest physical-semantics-and-extensions-have-distinct-owners
   (is (= :engine-state (surface/operation-layer :scan)))
+  (is (= :engine-state (surface/operation-layer :maintain)))
   (is (= :semantic-query (surface/operation-layer :pull)))
   (is (= :provider-diagnostics (surface/operation-layer :db-stats)))
   (is (= :projection (surface/operation-layer :view)))

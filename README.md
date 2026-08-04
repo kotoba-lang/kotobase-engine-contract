@@ -17,6 +17,13 @@ Merkle-LSM manifest can represent the same logical state while having different
 CIDs. Cross-engine equivalence is established by transaction/query/history
 answers and the logical checkpoint root.
 
+`checkpoint` and physical maintenance are deliberately different contracts.
+A checkpoint computes a logical-state commitment and may leave the physical
+layout unchanged. Optional `IMaintenance` performs real compaction/folding and
+must report the before/after physical roots, work units, and whether work was
+completed or was a no-op. Promotion tooling must never label a checkpoint
+duration as compaction evidence.
+
 ## Repositories around this seam
 
 | responsibility | owner |

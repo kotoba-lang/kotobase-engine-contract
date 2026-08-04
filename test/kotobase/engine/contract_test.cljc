@@ -28,3 +28,28 @@
          #"request-id"
          (contract/transact eng s1 {:database-id "db/a" :request-id "same"
                                     :tx-data [["e" "a" "v2"]]})))))
+
+(deftest checkpoint-is-not-physical-maintenance
+  (let [memory (memory/memory-engine test-digest)]
+    (is (thrown-with-msg?
+         #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+         #"does not implement physical maintenance"
+         (contract/maintain memory {:database-id "db/a"}))))
+  (let [eng (reify contract/IMaintenance
+              (-maintain [_ state _]
+                {:state (assoc state :physical-root "after")
+                 :receipt {:database-id "db/a"
+                           :before-physical-root "before"
+                           :after-physical-root "after"
+                           :work-units 3
+                           :status :completed
+                           :engine {:engine/id :memory
+                                    :engine/format-version 1
+                                    :engine/storage-model :memory
+                                    :engine/capabilities #{:transact :snapshot
+                                                           :scan :history
+                                                           :checkpoint}}}}))
+        result (contract/maintain eng {:database-id "db/a"
+                                      :physical-root "before"})]
+    (is (= "after" (get-in result [:receipt :after-physical-root])))
+    (is (= 3 (get-in result [:receipt :work-units])))))

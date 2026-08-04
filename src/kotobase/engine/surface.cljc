@@ -9,7 +9,7 @@
 
 (def operation-layers
   {:engine-state
-   #{:transact :snapshot :restore :scan :history :checkpoint}
+   #{:transact :snapshot :restore :scan :history :checkpoint :maintain}
 
    :semantic-query
    #{:datoms :seek-datoms :index-range :q :sparql :cypher :pull :pull-many
