@@ -16,6 +16,12 @@
   (-history [engine snapshot opts])
   (-checkpoint [engine snapshot opts]))
 
+(defprotocol IMaintenance
+  "Optional physical-layout maintenance. Kept separate from IEngine because
+  checkpoint proves logical state; it does not imply compaction, folding, or
+  publication of a new physical root."
+  (-maintain [engine state opts]))
+
 (defn nonblank-string? [x]
   (and (string? x) (not (str/blank? x))))
 
@@ -114,3 +120,30 @@
   ([engine snapshot opts]
    (completion/then-result (-checkpoint engine snapshot opts)
                            validate-checkpoint)))
+
+(defn validate-maintenance-result [result]
+  (let [{:keys [state receipt]} result]
+    (when-not (and (map? result) (map? state) (map? receipt)
+                   (nonblank-string? (:database-id receipt))
+                   (nonblank-string? (:before-physical-root receipt))
+                   (nonblank-string? (:after-physical-root receipt))
+                   (integer? (:work-units receipt))
+                   (not (neg? (:work-units receipt)))
+                   (#{:completed :noop} (:status receipt)))
+      (throw (ex-info "invalid maintenance result"
+                      {:type :kotobase.engine/invalid-maintenance-result
+                       :result result})))
+    (profile/validate-profile (:engine receipt))
+    result))
+
+(defn maintain
+  "Run real physical maintenance and return {:state :receipt}. This is not an
+  alias for checkpoint: a successful receipt names both physical roots and
+  the performed work. Engines without IMaintenance fail explicitly."
+  ([engine state] (maintain engine state {}))
+  ([engine state opts]
+   (when-not (satisfies? IMaintenance engine)
+     (throw (ex-info "engine does not implement physical maintenance"
+                     {:type :kotobase.engine/maintenance-unsupported})))
+   (completion/then-result (-maintain engine state (or opts {}))
+                           validate-maintenance-result)))
