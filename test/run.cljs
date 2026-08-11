@@ -5,6 +5,7 @@
             [kotobase.engine.conformance-test]
             [kotobase.engine.contract-test]
             [kotobase.engine.identity-test]
+            [kotobase.engine.metadata-test]
             [kotobase.engine.profile-test]
             [kotobase.engine.surface-test]
             [kotobase.engine.qualification-test]))

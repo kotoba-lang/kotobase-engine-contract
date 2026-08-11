@@ -1,5 +1,6 @@
 {:paths ["src"]
- :deps {}
+ :deps {io.github.kotoba-lang/io-ipld
+        {:git/sha "e08dc3b2ab705be292e388cd1ad136381544a041"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
@@ -9,4 +10,3 @@
   :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
          :main-opts ["-m" "clj-kondo.main" "--lint" "src" "test"
                      "--fail-level" "error"]}}}
-
