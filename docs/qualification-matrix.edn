@@ -1,5 +1,5 @@
 {:document/type :kotobase.engine/qualification-matrix
- :document/date "2026-08-03"
+ :document/date "2026-08-11"
  :rule "Only :eligible candidates may become the production default. Archive and anchor paths are evaluated separately."
  :workloads
  {:tiny-correctness {:entities 1000 :purpose :semantic-and-crash}
@@ -38,7 +38,8 @@
             :cold-writer-target-leaf-prefetch :r2-cold-mixed-write
             :r2-linearizable-cas :r2-second-process-reopen
             :post-upload-pre-cas-crash-isolation
-            :fresh-process-same-request-retry]
+            :fresh-process-same-request-retry
+            :bounded-root-manifest :confidential-metadata-segments]
    :evidence {:dataset-datoms 4001 :stored-blocks 48
               :point-read-block-requests 4
               :cold-mixed-write-block-requests 11
@@ -46,8 +47,7 @@
               :single-assertion-delta-block-writes 8
               :mixed-40-change-block-writes 18
               :equivalent-full-snapshot-block-writes 32}
-   :blockers [:bounded-root-manifest
-              :confidential-metadata
+   :blockers [:metadata-chain-read-amplification
               :production-latency-distribution
               :production-workload-performance-evidence-incomplete]
    :default-eligible false
@@ -59,19 +59,19 @@
    :passed [:semantic-conformance :typed-value-roundtrip
             :memory-differential :object-store-restore
             :retraction-mvcc :safe-epoch-zero-l0-compaction
-            :manifest-only-lazy-restore :range-pruned-run-selection
+            :bounded-root-lazy-restore :range-pruned-run-selection
             :mixed-cold-transaction :reader-pin-safe-epoch-advancement
             :safe-epoch-manifest-roundtrip :cljs-async-provider-coordinator
             :cljs-upload-before-cas :cljs-stale-writer-conflict
-            :cljs-cid-mismatch-fails-closed]
-   :evidence {:restore-block-requests 2
+            :cljs-cid-mismatch-fails-closed
+            :bounded-root-manifest :confidential-metadata-segments]
+   :evidence {:single-epoch-restore-block-requests 3
               :point-read-selected-runs 3
               :point-read-total-eavt-runs 13
               :cljs-point-read-block-requests 6
               :cljs-stored-blocks 50
               :reader-pin-safe-epoch-persisted true}
-   :blockers [:bounded-root-manifest
-              :confidential-metadata
+   :blockers [:metadata-chain-read-amplification
               :performance-evidence-incomplete]
    :default-eligible false
    :note "JVM and CLJS provider correctness gates are closed. Candidate may enter sampled shadow traffic; production-shaped p50/p99, write amplification, compaction and restore throughput remain required before default selection."}
