@@ -2,6 +2,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [kotobase.engine.canonical :as canonical]))
 
+(defrecord HostRecord [value])
+
 (defn- problem-of [thunk]
   (try
     (thunk)
@@ -45,6 +47,11 @@
            (problem-of #(canonical/canonical-value ##Inf))))
     (is (= :integer-out-of-range
            (problem-of #(canonical/canonical-value 9007199254740992))))))
+
+(deftest records-do-not-slip-through-the-map-branch
+  (is (map? (->HostRecord 1)) "the regression requires records to be map-like")
+  (is (= :record-requires-explicit-codec
+         (problem-of #(canonical/canonical-value (->HostRecord 1))))))
 
 (deftest unknown-domains-fail-closed
   (is (= :kotobase.engine/unknown-logical-domain

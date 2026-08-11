@@ -42,6 +42,11 @@
   silently inheriting host printer behaviour would move database identities."
   [x]
   (cond
+    ;; Records satisfy map? on both Clojure and ClojureScript. This check must
+    ;; precede the map branch or a runtime-specific type silently acquires a
+    ;; logical identity from its implementation fields.
+    (record? x) (reject! :record-requires-explicit-codec x)
+
     (map? x)
     [:map (->> x
                (map (fn [[k v]] [(canonical-value k) (canonical-value v)]))
@@ -77,7 +82,6 @@
       (not (finite-number? x)) (reject! :non-finite-number x)
       :else (reject! :floating-point-requires-explicit-codec x))
 
-    (record? x) (reject! :record-requires-explicit-codec x)
     :else (reject! :unsupported-type x)))
 
 (defn canonical-string [x]
