@@ -42,20 +42,23 @@
 
 (defn restore-chain
   "Read and open HEAD through its previous links. The result is ordered from
-  oldest to newest. GET-FN and OPEN may be immediate or completion-valued."
-  [get-fn open head]
-  (letfn [(step [cid newest-first]
-            (if-not cid
-              (vec (reverse newest-first))
-              (completion/then-result
-               (get-fn cid)
-               (fn [bytes]
-                 (when-not bytes
-                   (throw (ex-info "engine metadata block was not found"
-                                   {:type :kotobase.engine/missing-metadata-block
-                                    :cid cid})))
-                 (completion/then-result
-                  (decode-segment open (ipld/decode bytes))
-                  (fn [{:keys [previous] :as segment}]
-                    (step previous (conj newest-first segment))))))))]
-    (step head [])))
+  oldest to newest. GET-FN and OPEN may be immediate or completion-valued.
+  DECODE-NODE lets an engine unwrap a storage envelope before validation."
+  ([get-fn open head]
+   (restore-chain get-fn open ipld/decode head))
+  ([get-fn open decode-node head]
+   (letfn [(step [cid newest-first]
+             (if-not cid
+               (vec (reverse newest-first))
+               (completion/then-result
+                (get-fn cid)
+                (fn [bytes]
+                  (when-not bytes
+                    (throw (ex-info "engine metadata block was not found"
+                                    {:type :kotobase.engine/missing-metadata-block
+                                     :cid cid})))
+                  (completion/then-result
+                   (decode-segment open (decode-node bytes))
+                   (fn [{:keys [previous] :as segment}]
+                     (step previous (conj newest-first segment))))))))]
+     (step head []))))
