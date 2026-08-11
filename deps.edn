@@ -1,6 +1,6 @@
 {:paths ["src"]
  :deps {io.github.kotoba-lang/io-ipld
-        {:git/sha "e08dc3b2ab705be292e388cd1ad136381544a041"}}
+        {:git/sha "309db3f8a7d690ccd07abc69b1a37793955c6105"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
