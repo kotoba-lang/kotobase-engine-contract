@@ -32,6 +32,14 @@ representations rather than inheriting JVM or JavaScript printer behaviour.
 Signers sign the domain-separated `signature-payload`; signatures are not
 embedded into the value whose root they attest.
 
+`kotobase.engine.frontier/accept-head` closes the remaining mutable-discovery
+gap. A client persists `{database-id, logical-commit-root, epoch}` in secure
+local storage and accepts a different discovered head only when a
+CID/signature-verified, epoch-contiguous parent path reaches that last-seen
+root. It distinguishes rollback, same-epoch equivocation, and a higher but
+unrelated fork. The first observation is deliberately TOFU; IPNS, DNSLink, DID
+documents, S3, and HTTP remain discovery/transport and never become truth.
+
 `checkpoint` and physical maintenance are deliberately different contracts.
 A checkpoint computes a logical-state commitment and may leave the physical
 layout unchanged. Optional `IMaintenance` performs real compaction/folding and

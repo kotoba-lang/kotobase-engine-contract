@@ -4,6 +4,7 @@
             [kotobase.engine.canonical-test]
             [kotobase.engine.conformance-test]
             [kotobase.engine.contract-test]
+            [kotobase.engine.frontier-test]
             [kotobase.engine.identity-test]
             [kotobase.engine.profile-test]
             [kotobase.engine.surface-test]
