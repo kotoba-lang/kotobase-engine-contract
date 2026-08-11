@@ -20,3 +20,17 @@
     (is (contains? (:qualification/missing-semantic result)
                    :typed-value-roundtrip))))
 
+(deftest plaintext-or-growing-root-manifests-cannot-qualify
+  (let [semantic (zipmap qualification/semantic-gates (repeat true))
+        otherwise-resilient
+        (-> (zipmap qualification/resilience-gates (repeat true))
+            (assoc :bounded-root-manifest false
+                   :confidential-metadata false))
+        result (qualification/evaluate
+                {:engine profile/prolly
+                 :semantic semantic
+                 :resilience otherwise-resilient
+                 :performance {}})]
+    (is (= :qualifying (:qualification/status result)))
+    (is (= #{:bounded-root-manifest :confidential-metadata}
+           (:qualification/missing-resilience result)))))
