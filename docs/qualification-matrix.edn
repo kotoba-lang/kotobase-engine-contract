@@ -64,15 +64,19 @@
             :safe-epoch-manifest-roundtrip :cljs-async-provider-coordinator
             :cljs-upload-before-cas :cljs-stale-writer-conflict
             :cljs-cid-mismatch-fails-closed
-            :bounded-root-manifest :confidential-metadata-segments]
+            :bounded-root-manifest :confidential-metadata-segments
+            :persistent-metadata-index :indexed-old-request-replay
+            :lazy-history-hydration]
    :evidence {:single-epoch-restore-block-requests 3
+              :metadata-scale-epochs 128
+              :metadata-scale-restore-block-requests-upper-bound 9
+              :oldest-request-replay-block-requests-upper-bound 9
               :point-read-selected-runs 3
               :point-read-total-eavt-runs 13
               :cljs-point-read-block-requests 6
               :cljs-stored-blocks 50
               :reader-pin-safe-epoch-persisted true}
-   :blockers [:metadata-chain-read-amplification
-              :performance-evidence-incomplete]
+   :blockers [:performance-evidence-incomplete]
    :default-eligible false
    :note "JVM and CLJS provider correctness gates are closed. Candidate may enter sampled shadow traffic; production-shaped p50/p99, write amplification, compaction and restore throughput remain required before default selection."}
   {:candidate/id :lsm-prolly-checkpoint-engine
