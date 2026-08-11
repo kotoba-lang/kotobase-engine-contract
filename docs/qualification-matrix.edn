@@ -68,7 +68,7 @@
             :persistent-metadata-index :indexed-old-request-replay
             :lazy-history-hydration]
    :evidence {:single-epoch-restore-block-requests 3
-              :metadata-scale-epochs 128
+              :metadata-scale-epochs 32
               :metadata-scale-restore-block-requests-upper-bound 9
               :oldest-request-replay-block-requests-upper-bound 9
               :point-read-selected-runs 3
