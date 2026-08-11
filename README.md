@@ -17,6 +17,21 @@ Merkle-LSM manifest can represent the same logical state while having different
 CIDs. Cross-engine equivalence is established by transaction/query/history
 answers and the logical checkpoint root.
 
+`kotobase.engine.canonical` fixes the versioned, domain-separated logical value
+form (`kotobase.logical/v1`). It rejects host-dependent numeric and record
+representations rather than inheriting JVM or JavaScript printer behaviour.
+`kotobase.engine.identity` defines two separate v1 envelopes:
+
+- `kotobase.logical-commit/v1` binds transaction, checkpoint, schema, model and
+  admission-policy roots. V1 is intentionally a zero-or-one-parent chain;
+  multi-parent commits remain invalid until merge semantics are specified.
+- `kotobase.physical-publication/v1` binds one logical commit to an
+  engine-specific physical root. Repacking or changing engines therefore does
+  not move the logical database identity.
+
+Signers sign the domain-separated `signature-payload`; signatures are not
+embedded into the value whose root they attest.
+
 `checkpoint` and physical maintenance are deliberately different contracts.
 A checkpoint computes a logical-state commitment and may leave the physical
 layout unchanged. Optional `IMaintenance` performs real compaction/folding and
@@ -46,7 +61,11 @@ conformance runner composes all forms.
 
 Semantic PASS alone does not select a default. `kotobase.engine.qualification`
 adds independent resilience and workload-specific performance evidence gates;
-the initial candidate inventory is in `docs/qualification-matrix.edn`. The
+root manifests must remain bounded as history grows, and metadata persisted to
+an untrusted block store must not disclose logical Datom values. These are
+explicit qualification gates rather than assumptions inferred from encrypted
+covering indexes.
+The initial candidate inventory is in `docs/qualification-matrix.edn`. The
 Prolly candidate has passed manifest-only cold mutation and second-process
 reopen against real R2 semantics and is ready for server shadow traffic. It is
 not yet the production default: production latency distributions and restore

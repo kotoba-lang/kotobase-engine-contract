@@ -9,7 +9,8 @@
 
 (def resilience-gates
   #{:compare-and-set-head :retry-after-timeout :crash-recovery
-    :checkpoint-restore :content-verification})
+    :checkpoint-restore :content-verification
+    :bounded-root-manifest :confidential-metadata})
 
 (def performance-evidence
   #{:point-read-p50 :point-read-p99 :range-read-p99 :commit-p99
@@ -41,4 +42,3 @@
            (into #{} (remove #(true? (get resilience %))) resilience-gates)
            :qualification/missing-performance
            (into #{} (remove #(number? (get performance %))) performance-evidence))))
-

@@ -7,6 +7,9 @@
 (defn- digest [engine x]
   ((:digest-fn engine) (canonical/canonical-string x)))
 
+(defn- digest-canonical-string [engine canonical-string]
+  ((:digest-fn engine) canonical-string))
+
 (defn- rows-at [state basis-t]
   (->> (:history state)
        (filter #(<= (:t %) basis-t))
@@ -44,7 +47,8 @@
       (throw (ex-info "transaction database does not match state"
                       {:type :kotobase.engine/database-mismatch})))
     (let [tx (canonical/normalize-tx tx-data)
-          tx-root (digest this tx)]
+          tx-root (digest-canonical-string
+                   this (canonical/transaction-string tx))]
       (if-let [prior (get-in state [:requests request-id])]
         (if (= tx-root (:tx-root prior))
           {:state state :receipt (assoc (:receipt prior) :status :replayed)}
@@ -104,7 +108,7 @@
       {:database-id database-id
        :epoch basis-t
        :logical-checkpoint-root
-       (digest this (canonical/checkpoint-datoms rows))
+       (digest-canonical-string this (canonical/checkpoint-string rows))
        :physical-root (physical-root this snapshot-state)
        :engine profile/memory})))
 

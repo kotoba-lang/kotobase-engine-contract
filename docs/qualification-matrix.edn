@@ -46,7 +46,9 @@
               :single-assertion-delta-block-writes 8
               :mixed-40-change-block-writes 18
               :equivalent-full-snapshot-block-writes 32}
-   :blockers [:production-latency-distribution
+   :blockers [:bounded-root-manifest
+              :confidential-metadata
+              :production-latency-distribution
               :production-workload-performance-evidence-incomplete]
    :default-eligible false
    :note "Eligible for shadow traffic, not production default selection: request amplification is bounded on real R2 semantics, but p50/p99 and restore-throughput evidence are not yet production-shaped."}
@@ -68,7 +70,9 @@
               :cljs-point-read-block-requests 6
               :cljs-stored-blocks 50
               :reader-pin-safe-epoch-persisted true}
-   :blockers [:performance-evidence-incomplete]
+   :blockers [:bounded-root-manifest
+              :confidential-metadata
+              :performance-evidence-incomplete]
    :default-eligible false
    :note "JVM and CLJS provider correctness gates are closed. Candidate may enter sampled shadow traffic; production-shaped p50/p99, write amplification, compaction and restore throughput remain required before default selection."}
   {:candidate/id :lsm-prolly-checkpoint-engine
