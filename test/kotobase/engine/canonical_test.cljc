@@ -41,8 +41,22 @@
   (testing "a future format may add explicit wrappers without moving v1"
     (is (= :floating-point-requires-explicit-codec
            (problem-of #(canonical/canonical-value 0.5))))
-    (is (= :negative-zero
-           (problem-of #(canonical/canonical-value -0.0))))
+    ;; COMPUTED, not a literal. Measured 2026-08-24: a `-0.0` literal inside a
+    ;; function body reads back as +0.0 under SCI on nbb 1.5.212, while the
+    ;; same literal at the top level, behind a top-level `def`, or computed
+    ;; with `(- 0.0)` keeps its sign -- and nbb 1.4.208 and 1.4.210 get all
+    ;; four right. `#(canonical/canonical-value -0.0)` is a function body, so
+    ;; on current nbb the thunk passed +0.0 and this assertion failed. The
+    ;; codec was never wrong; the test could not construct a -0.0 there.
+    ;;
+    ;; Same shape, same day, in io-ipld's `value_test` (kotoba-lang/io-ipld
+    ;; 42985bc). Both were invisible because the only runtime anyone ran was
+    ;; the one where the literal still works.
+    (let [negative-zero (- 0.0)]
+      (is (neg? (/ 1.0 negative-zero))
+          "the fixture really is -0.0 on this runtime, whatever the printer says")
+      (is (= :negative-zero
+             (problem-of #(canonical/canonical-value negative-zero)))))
     (is (= :non-finite-number
            (problem-of #(canonical/canonical-value ##Inf))))
     (is (= :integer-out-of-range
