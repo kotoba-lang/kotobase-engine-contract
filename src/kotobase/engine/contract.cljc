@@ -1,5 +1,5 @@
 (ns kotobase.engine.contract
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kotobase.engine.completion :as completion]
             [kotobase.engine.profile :as profile]))
 
