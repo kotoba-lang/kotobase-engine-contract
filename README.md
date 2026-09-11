@@ -113,8 +113,8 @@ be inserted into the foreground database path.
 ## Verification
 
 ```sh
-clojure -M:test
-clojure -M:lint
+kbb -M:test
+kbb -M:lint
 npm install
 npm run test:cljs
 ```
