@@ -1,5 +1,5 @@
 (ns kotobase.engine.qualification-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kotobase.engine.profile :as profile]
             [kotobase.engine.qualification :as qualification]))
 

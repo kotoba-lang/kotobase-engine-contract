@@ -1,5 +1,5 @@
 (ns kotobase.engine.profile-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kotobase.engine.profile :as profile]))
 
 (deftest physical-strategies-are-separate-profiles
