@@ -1,5 +1,5 @@
 (ns kotobase.engine.surface-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kotobase.engine.surface :as surface]))
 
 (deftest physical-semantics-and-extensions-have-distinct-owners

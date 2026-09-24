@@ -1,5 +1,5 @@
 (ns kotobase.engine.canonical-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotobase.engine.canonical :as canonical]))
 
 (defrecord HostRecord [value])

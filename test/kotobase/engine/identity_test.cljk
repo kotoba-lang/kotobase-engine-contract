@@ -1,5 +1,5 @@
 (ns kotobase.engine.identity-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotobase.engine.identity :as identity]))
 
 (def commit

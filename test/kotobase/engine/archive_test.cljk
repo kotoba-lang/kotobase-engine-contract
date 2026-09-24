@@ -1,5 +1,5 @@
 (ns kotobase.engine.archive-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kotobase.engine.archive :as archive]))
 
 (def checkpoint

@@ -1,5 +1,5 @@
 (ns kotobase.engine.frontier-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotobase.engine.frontier :as frontier]
             [kotobase.engine.identity :as identity]))
 
