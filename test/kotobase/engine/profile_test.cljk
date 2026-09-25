@@ -10,7 +10,7 @@
 
 (deftest filecoin-and-fevm-are-not-database-engines
   (doseq [storage-model [:filecoin :fevm]]
-    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+    (is (thrown? js/Error
                  (profile/validate-profile
                   {:engine/id storage-model
                    :engine/format-version 1

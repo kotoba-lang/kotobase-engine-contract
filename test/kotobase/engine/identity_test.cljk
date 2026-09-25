@@ -32,7 +32,7 @@
           (try
             (identity/logical-commit
              (assoc commit :parents ["left" "right"]))
-            (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
+            (catch js/Error error
               (ex-data error)))))))
 
 (deftest signature-domain-binds-authority-and-key
@@ -50,6 +50,6 @@
            (:type
             (try
               (identity/logical-commit (assoc commit :physical-root "wrong-layer"))
-              (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
+              (catch js/Error error
                 (ex-data error))))))))
 
