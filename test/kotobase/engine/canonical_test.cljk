@@ -8,7 +8,7 @@
   (try
     (thunk)
     nil
-    (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
+    (catch js/Error error
       (:problem (ex-data error)))))
 
 (deftest logical-identities-are-versioned-and-domain-separated
@@ -72,5 +72,5 @@
          (:type
           (try
             (canonical/canonical-domain-string :typo [])
-            (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
+            (catch js/Error error
               (ex-data error)))))))

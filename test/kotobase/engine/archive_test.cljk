@@ -26,7 +26,7 @@
     (is (= "logical-7" (:logical-checkpoint-root a3)))))
 
 (deftest lifecycle-skips-are-rejected
-  (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+  (is (thrown? js/Error
                (archive/transition-archive
                 (archive/archive-request (assoc checkpoint :provider :filecoin))
                 :verified {}))))

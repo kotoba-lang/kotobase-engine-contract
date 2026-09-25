@@ -33,7 +33,7 @@
   (try
     (thunk)
     nil
-    (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
+    (catch js/Error error
       (:problem (ex-data error)))))
 
 (deftest tofu-and-idempotent-observation
