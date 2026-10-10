@@ -163,7 +163,8 @@
                                     [[:db/add "e" :doc/status "right"]])
         m (run-merge graph [a b])
         graph (install graph m)]
-    (is (= {:status :fast-forward :root a :heads [a]} (run-merge graph [a a])))
+    (is (= {:status :fast-forward :root a :heads [a]}
+           (dissoc (run-merge graph [a a]) :work)))
     (testing "merging a head with its own ancestors is a fast-forward"
       (is (= (:root m) (:root (run-merge graph [(:root m) a]))))
       (is (= :fast-forward (:status (run-merge graph [(:root m) a b g]))))
@@ -773,6 +774,10 @@
                        {:logical-checkpoint-root
                         (digest (canonical/checkpoint-string datoms))}))))))
 
+(defn- work-of [[graph root]]
+  (:work (merge/verify-merge {:graph graph :root root :schema schema
+                              :digest digest :max-work 100000000})))
+
 (deftest many-merges-are-bounded-and-scale
   ;; R2 major 2: each merge step used to union full ancestor closures and
   ;; re-join every retraction tombstone of a touched attribute, and the total
@@ -784,18 +789,13 @@
                                         :digest digest :max-work 500}))))
       (is (= 2 (count (merge/state {:graph graph :root root :schema schema
                                     :digest digest})))))
-    (testing "constant state: replay time grows ~linearly with merges"
-      (let [[small-graph small-root] (ladder 250)
-            timed (fn [graph root]
-                    (let [t0 (js/Date.now)]
-                      (merge/state {:graph graph :root root :schema schema
-                                    :digest digest})
-                      (- (js/Date.now) t0)))
-            small (timed small-graph small-root)
-            large (timed graph root)]
-        ;; Round-1 code: 438 -> 3993 ms (~9x); linear join: ~3-4x.
-        (is (< large (+ 50 (* 6 small)))
-            (str "250 merges: " small " ms, 1000 merges: " large " ms"))))))
+    (testing "constant state: replay work grows linearly with merges"
+      ;; Work units, not wall-clock. Re-joining every retraction tombstone or
+      ;; copying closures per merge would make this ratio grow with n.
+      (let [small (work-of (ladder 250))
+            large (work-of [graph root])]
+        (is (< large (* 9/2 small))
+            (str "250 merges: " small " units, 1000 merges: " large " units"))))))
 
 (deftest options-and-heads-fail-closed
   (is (= :invalid-heads (problem-of #(run-merge {} ["bafyé" "bafya"]))))
@@ -829,3 +829,82 @@
             (map canonical/checkpoint-datom-fragment sorted))))
     (is (= (canonical/checkpoint-string [])
            (canonical/checkpoint-string-from-fragments [])))))
+
+;; ---------------------------------------------------------------------------
+;; Round-3 review regressions: every unit of replay work is charged
+
+(defn- dots-ladder
+  "GEN-TX at genesis, then CHAIN v1 commits each running CHAIN-TX, then M
+  conflict-free fork+merge rounds written directly. Returns the graph and
+  the last merge root."
+  [gen-tx chain chain-tx m]
+  (let [[graph gen] (add {} [] (into (vec gen-tx) [[:db/add "x" :doc/tag "x-0"]
+                                                   [:db/add "y" :doc/tag "y-0"]]))
+        [graph cur] (reduce (fn [[graph cur] _] (add graph [cur] chain-tx))
+                            [graph gen] (range chain))
+        visible (fn [graph root]
+                  (merge/state {:graph graph :root root :schema schema
+                                :digest digest :max-work 100000000}))]
+    (loop [i 0 graph graph cur cur]
+      (if (= i m)
+        [graph cur]
+        (let [[graph x] (add graph [cur] [[:db/retract "x" :doc/tag (str "x-" i)]
+                                          [:db/add "x" :doc/tag (str "x-" (inc i))]])
+              [graph y] (add graph [cur] [[:db/retract "y" :doc/tag (str "y-" i)]
+                                          [:db/add "y" :doc/tag (str "y-" (inc i))]])
+              datoms (-> (set (visible graph cur))
+                         (disj {:e "x" :a :doc/tag :v (str "x-" i)}
+                               {:e "y" :a :doc/tag :v (str "y-" i)})
+                         (conj {:e "x" :a :doc/tag :v (str "x-" (inc i))}
+                               {:e "y" :a :doc/tag :v (str "y-" (inc i))}))
+              [graph mr] (add-v2 graph [x y] []
+                                 {:logical-checkpoint-root
+                                  (digest (canonical/checkpoint-string datoms))})]
+          (recur (inc i) graph mr))))))
+
+(deftest dots-are-collapsed-or-charged
+  ;; R3 major 1: work scaled with dots, but only live datoms were charged.
+  (testing "duplicate assertions inside one transaction collapse to one dot"
+    (let [base (work-of (dots-ladder [] 0 [] 30))
+          dup (work-of (dots-ladder (repeat 2000 [:db/add "e" :doc/tag "x"]) 0 [] 30))]
+      ;; Each event is charged once (~2000), not once per merge (~60000).
+      (is (< (- dup base) 6000) (str "base " base ", 2000 duplicates " dup))))
+  (testing "dots accumulated across commits are charged at every merge"
+    (let [base (work-of (dots-ladder [] 200 [] 30))
+          dots (work-of (dots-ladder [] 200 [[:db/add "e" :doc/tag "x"]] 30))]
+      (is (<= (* 30 200) (- dots base)) (str "base " base ", 200 dots " dots))
+      (is (= :work-budget-exceeded
+             (problem-of #(merge/verify-merge
+                           {:graph (first (dots-ladder [] 200 [[:db/add "e" :doc/tag "x"]] 30))
+                            :root (second (dots-ladder [] 200 [[:db/add "e" :doc/tag "x"]] 30))
+                            :schema schema :digest digest :max-work (+ base 1000)}))))
+      (is (some? (merge/verify-merge
+                  {:graph (first (dots-ladder [] 200 [] 30))
+                   :root (second (dots-ladder [] 200 [] 30))
+                   :schema schema :digest digest :max-work (+ base 1000)}))))))
+
+(defn- cascade
+  "Unique fallback cascade of length K: every e_i loses u_i and falls back
+  to u_{i+1}, which displaces e_{i+1}."
+  [k]
+  (let [[graph gen] (add {} [] [])
+        [graph a] (add graph [gen] (into [[:db/add "X" :user/email "u0"]]
+                                         (for [i (range k)]
+                                           [:db/add (str "e" i) :user/email (str "u" (inc i))])))
+        [graph p] (add graph [gen] [[:db/add "pad" :doc/tag "p"]])
+        [graph b] (add graph [p] (vec (for [i (range k)]
+                                        [:db/add (str "e" i) :user/email (str "u" i)])))]
+    (merge/merge {:graph graph :heads [a b] :schema schema :digest digest
+                  :max-work 100000000})))
+
+(deftest unique-cascade-work-is-linear
+  ;; R3 major 2: the fixpoint re-chose every group each round, uncharged.
+  (let [small (cascade 100)
+        large (cascade 400)]
+    (is (= 400 (count (filter #(= :unique (:kind %)) (:conflicts large)))))
+    (is (= 400 (count (:tx large))))
+    (is (contains? (set (map (juxt :e :v) (:datoms large))) ["e0" "u1"]))
+    (is (contains? (set (map (juxt :e :v) (:datoms large))) ["e399" "u400"]))
+    (is (< (:work large) (* 5 (:work small)))
+        (str "k=100: " (:work small) " units, k=400: " (:work large) " units"))
+    (is (<= (* 400 2) (:work large)) "exclusions are charged")))

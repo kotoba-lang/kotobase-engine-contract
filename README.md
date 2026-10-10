@@ -55,7 +55,8 @@ bounded by `:max-closure` and `:max-work`. Every v2 commit in the closure is
 recomputed during a single replay, so `merge`, `state` and `verify-merge`
 verify nested merges recursively. Replay is linear in events for linear
 history, but each merge resolves and checkpoints its full state, so the cost
-is O(events + merges x state); `:max-work` fails closed beyond the budget. `accept-head` treats a merge as an ordinary descendant
+is O(events + merges x (state + dots)); `:max-work` charges every such loop
+and fails closed beyond the budget. `accept-head` treats a merge as an ordinary descendant
 once its proof entry carries every parent (`:parent-entries`) and its epoch
 is exactly 1 + max(parent epochs), so a merge naming both equivocating heads
 advances either observer.
