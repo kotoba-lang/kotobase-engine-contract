@@ -14,10 +14,23 @@
   order decides only between causally concurrent events that the schema says
   cannot coexist: the latest stamp wins a cardinality-one attribute, the
   earliest stamp keeps a `:db/unique` value. Every such decision is written as
-  an explicit datom into the merge commit's resolution transaction."
+  an explicit datom into the merge commit's resolution transaction.
+
+  Implementation: the closure is replayed once in `(epoch, CID)` order. Each
+  commit's state is the observed-remove set of live assertion dots (and of
+  retraction dots no later assertion has observed), built from its parent's
+  state with structural sharing. A v2 commit met during the replay is itself
+  recomputed and must match byte-for-byte, so a merge's ancestry is verified
+  recursively, each commit once."
   (:refer-clojure :exclude [merge])
   (:require [kotobase.engine.canonical :as canonical]
             [kotobase.engine.identity :as identity]))
+
+(def default-max-closure
+  "Default bound on the number of commits one merge/state/verify call may
+  walk. The reference replay is O(history); a caller with a larger verified
+  history raises it explicitly with `:max-closure`."
+  100000)
 
 (defn- reject! [problem message data]
   (throw (ex-info message (assoc data :type :kotobase.merge/rejected
@@ -44,48 +57,68 @@
                {:root root}))
     commit))
 
-(defn- ancestry
-  "Return {:commits {root commit} :closure {root #{ancestors incl. self}}} for
-  the union of the closures of ROOTS. Verifies every reached entry and that
-  every commit's epoch is exactly 1 + max(parent epochs)."
-  [graph digest roots]
-  (let [commits (loop [pending (vec roots) seen {}]
-                  (if-let [root (peek pending)]
-                    (let [pending (pop pending)]
-                      (if (contains? seen root)
-                        (recur pending seen)
-                        (let [commit (verify-entry! digest root
-                                                    (entry graph root))]
-                          (recur (into pending (:parents commit))
-                                 (assoc seen root commit)))))
-                    seen))
-        order (sort-by (fn [[root commit]] [(:epoch commit) root]) commits)]
-    {:commits commits
-     :closure
-     (reduce
-      (fn [closure [root {:keys [parents epoch]}]]
-        (when (seq parents)
-          (let [expected (inc (apply max (map #(:epoch (get commits %))
-                                               parents)))]
-            (when-not (= expected epoch)
-              (reject! :invalid-epoch
-                       "commit epoch must be 1 + max(parent epochs)"
-                       {:root root :epoch epoch :expected expected}))))
-        (assoc closure root
-               (reduce (fn [acc parent]
-                         (into acc (or (get closure parent)
-                                       (reject! :cycle
-                                                "commit graph is not acyclic"
-                                                {:root root :parent parent}))))
-                       #{root} parents)))
-      {} order)}))
+(defn- same-field! [commits field]
+  (let [values (set (map field commits))]
+    (when-not (= 1 (count values))
+      (reject! :incompatible-heads
+               (str "merge heads disagree on " (name field))
+               {:field field :values values}))))
+
+(defn- walk
+  "Verified commits reachable from ROOTS. Every commit must share the heads'
+  :database-id and :schema-root (v1 replays history under one schema), and
+  the walk fails closed once it would exceed MAX-CLOSURE commits."
+  [graph digest roots reference max-closure]
+  (loop [pending (vec roots) seen {}]
+    (if-let [root (peek pending)]
+      (let [pending (pop pending)]
+        (if (contains? seen root)
+          (recur pending seen)
+          (do
+            (when (<= max-closure (count seen))
+              (reject! :closure-too-large "ancestor closure exceeds max-closure"
+                       {:max-closure max-closure}))
+            (let [commit (verify-entry! digest root (entry graph root))]
+              (when-not (= (:database-id reference) (:database-id commit))
+                (reject! :database-mismatch
+                         "ancestor belongs to another database"
+                         {:root root :expected (:database-id reference)
+                          :actual (:database-id commit)}))
+              (when-not (= (:schema-root reference) (:schema-root commit))
+                (reject! :incompatible-history
+                         "ancestor schema-root differs from the heads' schema"
+                         {:root root :expected (:schema-root reference)
+                          :actual (:schema-root commit)}))
+              (recur (into pending (:parents commit))
+                     (assoc seen root commit))))))
+      seen)))
+
+(defn- check-provenance!
+  "Genesis is the only parentless commit and sits at epoch 0; every other
+  commit is at exactly 1 + max(parent epochs). Strictly increasing epochs make
+  the graph acyclic and `(epoch, CID)` a linear extension of causality."
+  [commits]
+  (doseq [[root {:keys [parents epoch]}] commits]
+    (let [expected (if (seq parents)
+                     (inc (apply max (map #(:epoch (get commits %)) parents)))
+                     0)]
+      (when-not (= expected epoch)
+        (reject! :invalid-epoch
+                 "commit epoch must be 0 at genesis and 1 + max(parent epochs)"
+                 {:root root :epoch epoch :expected expected}))))
+  (let [geneses (sort (keep (fn [[root c]] (when (empty? (:parents c)) root))
+                            commits))]
+    (when-not (= 1 (count geneses))
+      (reject! :unrelated-histories "heads do not share a single genesis"
+               {:geneses (vec geneses)}))))
 
 (defn- ancestor? [closure ancestor descendant]
   (contains? (get closure descendant) ancestor))
 
 (defn reduce-heads
   "Distinct heads that are not an ancestor of another head, in canonical
-  (ascending CID) order. Merging an ancestor is a no-op."
+  (ascending CID) order. Merging an ancestor is a no-op. CLOSURE maps each
+  head to its ancestor set (including itself)."
   [closure heads]
   (let [heads (identity/canonical-parents heads)]
     (filterv (fn [h] (not-any? #(and (not= h %) (ancestor? closure h %)) heads))
@@ -93,33 +126,34 @@
 
 (defn merge-bases
   "Maximal common ancestors of HEADS (more than one in a criss-cross).
-  Requires the closure map from `ancestry`."
-  [closure heads]
-  (let [closures (map #(get closure %) heads)
-        common (filter (fn [c] (every? #(contains? % c) closures))
-                       (first closures))]
+  COMMITS maps root -> commit for the closure, CLOSURE maps each head to its
+  ancestor set. The common set is downward closed, so a common ancestor is
+  maximal exactly when none of its children is common."
+  [commits closure heads]
+  (let [closures (sort-by count (map #(get closure %) heads))
+        common (set (filter (fn [c] (every? #(contains? % c) (rest closures)))
+                            (first closures)))
+        children (reduce (fn [acc [root commit]]
+                           (reduce #(update %1 %2 conj root) acc (:parents commit)))
+                         {} commits)]
     (->> common
-         (filter (fn [c] (not-any? #(and (not= c %) (ancestor? closure c %))
-                                   common)))
+         (remove (fn [c] (some common (get children c))))
          sort
          vec)))
 
 ;; ---------------------------------------------------------------------------
-;; Events
-
-(defn- events [graph commits]
-  (->> commits
-       (mapcat (fn [[root commit]]
-                 (map-indexed
-                  (fn [index d]
-                    (assoc d :root root :stamp [(:epoch commit) root index]))
-                  (canonical/normalize-tx (:tx (get graph root))))))
-       vec))
-
-(defn- happens-before? [closure x y]
-  (if (= (:root x) (:root y))
-    (< (nth (:stamp x) 2) (nth (:stamp y) 2))
-    (ancestor? closure (:root x) (:root y))))
+;; Replay state
+;;
+;; Datoms are keyed by canonical strings, never host equality, so `[1 2]` and
+;; `(1 2)` are different values exactly as their canonical bytes are.
+;;
+;; state = {:closure #{root ...}
+;;          :live {ea-key {v-key {dot rank}}}   ; live assertion dots
+;;          :open {ea-key {v-key {dot true}}}}  ; retractions not yet observed
+;;                                              ; by a later assertion
+;; dot  = [commit-root tx-index]
+;; rank = [epoch commit-root tx-index], the LWW/first-claim order. A merge
+;;        re-assertion inherits the rank of the assertion it keeps.
 
 (defn- cardinality-one? [schema a]
   (= :db.cardinality/one (:db/cardinality (get schema a))))
@@ -127,212 +161,363 @@
 (defn- unique? [schema a]
   (some? (:db/unique (get schema a))))
 
-(defn- kills?
-  "Does event R, given that it happens after assertion A, remove A?"
-  [schema a r]
-  (if (= :retract (:op r))
-    (= (:v r) (:v a))
-    (and (cardinality-one? schema (:a a)) (not= (:v r) (:v a)))))
-
-(defn- datom-key [{:keys [e a v]}] [e a v])
-
 (defn- order-key [x] (canonical/canonical-string x))
 
-(defn- live-assertions
-  "Assertion events not removed by any causally later event on the same
-  entity/attribute."
-  [schema closure evs]
-  (->> (group-by (juxt :e :a) evs)
-       vals
-       (mapcat (fn [group]
-                 (filter (fn [a]
-                           (and (= :assert (:op a))
-                                (not-any? #(and (happens-before? closure a %)
-                                                (kills? schema a %))
-                                          group)))
-                         group)))))
+(defn- dissoc2 [m k1 k2]
+  (let [inner (dissoc (get m k1) k2)]
+    (if (empty? inner) (dissoc m k1) (assoc m k1 inner))))
 
-(defn- max-stamp [evs] (last (sort (map :stamp evs))))
-(defn- min-stamp [evs] (first (sort (map :stamp evs))))
+(defn- assoc3 [m k1 k2 k3 v]
+  (assoc m k1 (assoc (get m k1 {}) k2 (assoc (get-in m [k1 k2] {}) k3 v))))
+
+(defn- keyed-tx
+  "Normalized tx datoms with their canonical entity/attribute and value keys."
+  [tx]
+  (mapv (fn [{:keys [e a v] :as d}]
+          (assoc d :ea (canonical/canonical-string [e a])
+                 :vk (canonical/canonical-string v)))
+        (canonical/normalize-tx tx)))
+
+(defn- apply-event [schema state {:keys [op a ea vk]} dot rank]
+  (case op
+    :assert
+    (-> state
+        (update :live (fn [live]
+                        (let [values (if (cardinality-one? schema a)
+                                       (select-keys (get live ea) [vk])
+                                       (get live ea {}))]
+                          (assoc live ea
+                                 (assoc values vk
+                                        (assoc (get values vk {}) dot rank))))))
+        (update :open dissoc2 ea vk))
+    :retract
+    (-> state
+        (update :live dissoc2 ea vk)
+        (update :open assoc3 ea vk dot true))))
+
+(defn- seen-by? [ctx [root _]]
+  (some #(contains? % root) ctx))
+
+(defn- merge-dots
+  "Observed-remove join of one datom's dots. A dot survives if one side has
+  it and every side whose closure contains its commit still has it."
+  [da db ctx-a ctx-b]
+  (if (identical? da db)
+    (not-empty da)
+    (let [keep-side (fn [own other other-ctx]
+                      (reduce-kv (fn [acc d r]
+                                   (if (or (contains? other d)
+                                           (not (seen-by? other-ctx d)))
+                                     (assoc acc d r)
+                                     acc))
+                                 {} own))]
+      (not-empty (into (keep-side da db ctx-b) (keep-side db da ctx-a))))))
+
+(defn- merge-values [ma mb ctx-a ctx-b]
+  (if (identical? ma mb)
+    ma
+    (not-empty
+     (reduce (fn [acc vk]
+               (if-let [dots (merge-dots (get ma vk {}) (get mb vk {})
+                                         ctx-a ctx-b)]
+                 (assoc acc vk dots)
+                 acc))
+             {} (distinct (concat (keys ma) (keys mb)))))))
+
+(defn- merge-index [a b ctx-a ctx-b]
+  (let [step (fn [acc ea]
+               (if-let [m (merge-values (get a ea {}) (get b ea {}) ctx-a ctx-b)]
+                 (assoc acc ea m)
+                 (dissoc acc ea)))
+        acc (reduce step a (keys b))]
+    (reduce step acc (remove #(contains? b %) (keys a)))))
+
+(defn- merge-states
+  "Join the states of several parents. The pairwise fold is exact because the
+  accumulated context is the union of the folded parents' closures."
+  [states]
+  (let [[s0 & more] states]
+    (first
+     (reduce (fn [[acc ctx] s]
+               (let [ctx-s [(:closure s)]]
+                 [{:live (merge-index (:live acc) (:live s) ctx ctx-s)
+                   :open (merge-index (:open acc) (:open s) ctx ctx-s)}
+                  (conj ctx (:closure s))]))
+             [(select-keys s0 [:live :open]) [(:closure s0)]]
+             more))))
+
+(defn- union-closure [closures root]
+  (let [[big & rest] (sort-by (comp - count) closures)]
+    (conj (reduce into big rest) root)))
 
 ;; ---------------------------------------------------------------------------
 ;; Resolution
 
-(defn- retract-vs-assert-conflicts
-  "A present datom whose live assertion is concurrent with a retraction that
-  no live assertion has since observed. Observed-remove semantics keep it;
-  the merge re-asserts it so the decision is explicit in history."
-  [closure evs live-by-datom]
-  (let [retracts (group-by datom-key (filter #(= :retract (:op %)) evs))]
-    (->> live-by-datom
-         (keep (fn [[k lives]]
-                 (let [open (filterv
-                             (fn [r]
-                               (and (some #(and (not (happens-before? closure % r))
-                                                (not (happens-before? closure r %)))
-                                          lives)
-                                    (not-any? #(happens-before? closure r %)
-                                              lives)))
-                             (get retracts k))]
-                   (when (seq open)
-                     (let [[e a v] k]
-                       {:kind :retract-vs-assert :e e :a a :v v
-                        :resolution :assert-wins
-                        :assert-commits (vec (sort (distinct (map :root lives))))
-                        :retract-commits (vec (sort (distinct (map :root open))))})))))
-         vec)))
+(defn- max-rank [dots] (reduce #(if (pos? (compare %2 %1)) %2 %1) (vals dots)))
+(defn- min-rank [dots] (reduce #(if (neg? (compare %2 %1)) %2 %1) (vals dots)))
 
-(defn- cardinality-one-conflicts [schema live-by-datom]
-  (->> live-by-datom
-       (filter (fn [[[_ a _] _]] (cardinality-one? schema a)))
-       (group-by (fn [[[e a _] _]] [e a]))
-       (keep (fn [[[e a] values]]
-               (when (< 1 (count values))
-                 (let [ranked (sort-by (fn [[_ lives]] (max-stamp lives))
-                                       values)
-                       [[[_ _ winner] winner-lives]] (take-last 1 ranked)]
-                   {:kind :cardinality-one :e e :a a
-                    :winner winner
-                    :winner-commit (second (max-stamp winner-lives))
-                    :losers (->> (butlast ranked)
-                                 (map (fn [[[_ _ v] _]] v))
-                                 (sort-by order-key) vec)
-                    :rule :latest-stamp}))))
-       vec))
+(defn- choose
+  "Current choice per entity/attribute: the best-ranked non-excluded value of
+  a cardinality-one attribute, every non-excluded value otherwise."
+  [groups excluded]
+  (mapcat (fn [{:keys [one? ranked]}]
+            (let [remaining (remove #(contains? excluded (:k %)) ranked)]
+              (if one? (take 1 remaining) remaining)))
+          groups))
 
-(defn- unique-conflicts [schema live-by-datom]
-  (->> live-by-datom
-       (filter (fn [[[_ a _] _]] (unique? schema a)))
-       (group-by (fn [[[_ a v] _]] [a v]))
-       (keep (fn [[[a v] holders]]
-               (when (< 1 (count holders))
-                 (let [ranked (sort-by (fn [[_ lives]] (min-stamp lives))
-                                       holders)
-                       [[[winner _ _] winner-lives]] ranked]
-                   {:kind :unique :a a :v v
-                    :winner winner
-                    :winner-commit (second (min-stamp winner-lives))
-                    :losers (->> (rest ranked)
-                                 (map (fn [[[e _ _] _]] e))
-                                 (sort-by order-key) vec)
-                    :rule :earliest-stamp}))))
-       vec))
+(defn- unique-fixpoint
+  "Exclude every unique holder that loses to an earlier claim, re-choosing
+  cardinality-one values after each round until nothing changes. Exclusions
+  only grow and each group's winner is the earliest claim among entities
+  that still want the value, so the fixpoint is unique."
+  [groups]
+  (loop [excluded #{} losers {}]
+    (let [held (group-by :uk (filter :unique? (choose groups excluded)))
+          fresh (for [[uk holders] held
+                      :when (< 1 (count holders))
+                      loser (rest (sort-by (juxt :min-rank :k) holders))]
+                  [uk loser])]
+      (if (empty? fresh)
+        {:excluded excluded :losers losers
+         :holders (into {} (keep (fn [[uk hs]] (when (contains? losers uk)
+                                                 [uk (first hs)]))
+                                 held))}
+        (recur (into excluded (map (comp :k second)) fresh)
+               (reduce (fn [acc [uk loser]] (update acc uk (fnil conj []) loser))
+                       losers fresh))))))
 
-(defn- sort-conflicts [conflicts]
-  (vec (sort-by order-key conflicts)))
-
-(defn resolve-state
-  "Pure datom-level merge over an event set. Returns the visible datoms after
-  resolution, the resolution transaction and the conflict report."
-  [schema closure evs]
-  (let [live-by-datom (group-by datom-key (live-assertions schema closure evs))
-        ra (retract-vs-assert-conflicts closure evs live-by-datom)
-        c1 (cardinality-one-conflicts schema live-by-datom)
-        c1-losers (set (for [{:keys [e a losers]} c1, v losers] [e a v]))
-        after-c1 (apply dissoc live-by-datom c1-losers)
-        uq (unique-conflicts schema after-c1)
-        uq-losers (set (for [{:keys [a v losers]} uq, e losers] [e a v]))
-        visible (apply dissoc after-c1 uq-losers)
-        retracts (for [[e a v] (concat c1-losers uq-losers)]
-                   {:e e :a a :v v :op :retract})
-        ;; A contested datom that then lost a cardinality/unique decision is
-        ;; explained by that decision and retracted; report only survivors.
-        ra (filterv #(contains? visible [(:e %) (:a %) (:v %)]) ra)
-        re-asserts (for [{:keys [e a v]} ra]
-                     {:e e :a a :v v :op :assert})]
+(defn- resolve-state
+  "Visible datoms, resolution transaction and conflict report for a joined
+  state."
+  [schema registry {:keys [live open]}]
+  (let [groups
+        (for [[ea values] live]
+          (let [items (for [[vk dots] values]
+                        (let [{:keys [e a v]} (get registry [ea vk])]
+                          {:k [ea vk] :e e :a a :v v
+                           :uk [(canonical/canonical-string a) vk]
+                           :unique? (unique? schema a)
+                           :max-rank (max-rank dots) :min-rank (min-rank dots)
+                           :dots dots}))
+                a (:a (first items))]
+            {:one? (cardinality-one? schema a)
+             :ranked (sort-by (juxt :max-rank :k) #(compare %2 %1) items)}))
+        {:keys [excluded losers holders]} (unique-fixpoint groups)
+        visible (vec (choose groups excluded))
+        visible-keys (set (map :k visible))
+        c1 (for [{:keys [one? ranked]} groups
+                 :when one?
+                 :let [winner (first (filter #(contains? visible-keys (:k %))
+                                             ranked))
+                       beaten (remove #(or (contains? excluded (:k %))
+                                           (= winner %))
+                                      ranked)]
+                 :when (and winner (seq beaten))]
+             {:winner winner :beaten beaten})
+        c1-conflicts (for [{:keys [winner beaten]} c1]
+                       {:kind :cardinality-one :e (:e winner) :a (:a winner)
+                        :winner (:v winner)
+                        :winner-commit (second (:max-rank winner))
+                        :losers (vec (sort-by order-key (map :v beaten)))
+                        :rule :latest-stamp})
+        uq-conflicts (for [[uk ls] losers
+                           :let [w (get holders uk)]]
+                       {:kind :unique :a (:a w) :v (:v w)
+                        :winner (:e w)
+                        :winner-commit (second (:min-rank w))
+                        :losers (vec (sort-by order-key (map :e ls)))
+                        :rule :earliest-stamp})
+        ra (for [{:keys [k e a v dots]} visible
+                 :let [rdots (get-in open k)]
+                 :when (seq rdots)]
+             {:kind :retract-vs-assert :e e :a a :v v
+              :resolution :assert-wins
+              :assert-commits (vec (sort (distinct (map first (keys dots)))))
+              :retract-commits (vec (sort (distinct (map first (keys rdots)))))})
+        retracts (concat (mapcat :beaten c1) (mapcat val losers))]
     {:datoms (canonical/checkpoint-datoms
-              (map (fn [[e a v]] {:e e :a a :v v}) (keys visible)))
-     :tx (vec (concat (sort-by order-key (distinct retracts))
-                      (sort-by order-key re-asserts)))
-     :conflicts (sort-conflicts (concat ra c1 uq))}))
+              (map #(select-keys % [:e :a :v]) visible))
+     :tx (vec (concat (sort-by order-key
+                               (distinct (map (fn [{:keys [e a v]}]
+                                                {:e e :a a :v v :op :retract})
+                                              retracts)))
+                      (sort-by order-key
+                               (map (fn [{:keys [e a v]}]
+                                      {:e e :a a :v v :op :assert})
+                                    ra))))
+     :conflicts (vec (sort-by order-key (concat ra c1-conflicts uq-conflicts)))}))
+
+(defn- merge-commit [digest head-commits heads tx datoms]
+  (let [head (first head-commits)]
+    (identity/logical-commit
+     {:format identity/merge-commit-format
+      :merge-policy identity/merge-policy
+      :database-id (:database-id head)
+      :epoch (inc (apply max (map :epoch head-commits)))
+      :parents heads
+      :tx-root (digest (canonical/transaction-string tx))
+      :logical-checkpoint-root (digest (canonical/checkpoint-string datoms))
+      :schema-root (:schema-root head)
+      :model-contract-root (:model-contract-root head)
+      :admission-policy-root (:admission-policy-root head)})))
+
+(defn- check-heads! [commits heads]
+  (doseq [field [:database-id :schema-root :model-contract-root
+                 :admission-policy-root]]
+    (same-field! (map #(get commits %) heads) field)))
+
+(defn- merge-step
+  "Recompute merge commit ROOT from its parents' states; it must be
+  byte-identical, which also proves its parent set is already reduced."
+  [digest schema registry commits states root commit]
+  (let [parents (:parents commit)
+        closure (into {} (map (fn [p] [p (:closure (get states p))])) parents)]
+    (when-not (= parents (reduce-heads closure parents))
+      (reject! :merge-mismatch "merge commit names a redundant ancestor parent"
+               {:root root}))
+    (check-heads! commits parents)
+    (let [joined (merge-states (map #(get states %) parents))
+          {:keys [tx datoms]} (resolve-state schema registry joined)
+          expected (digest (identity/logical-commit-string
+                            (merge-commit digest (map #(get commits %) parents)
+                                          parents tx datoms)))]
+      (when-not (= root expected)
+        (reject! :merge-mismatch
+                 "merge commit differs from the deterministic merge of its parents"
+                 {:root root :expected expected}))
+      (assoc joined :closure (union-closure (vals closure) root)))))
+
+(defn- replay
+  "Verify and replay the union closure of ROOTS. Returns the commits, the
+  canonical datom registry and the state of every root."
+  [graph digest schema roots max-closure]
+  (let [roots (identity/canonical-parents roots)
+        root-commits (mapv #(verify-entry! digest % (entry graph %)) roots)
+        _ (doseq [field [:database-id :schema-root]]
+            (same-field! root-commits field))
+        commits (walk graph digest roots (first root-commits) max-closure)
+        _ (check-provenance! commits)
+        order (sort-by (fn [[root commit]] [(:epoch commit) root]) commits)
+        txs (into {} (map (fn [[root _]]
+                            [root (keyed-tx (:tx (get graph root)))]))
+                  commits)
+        registry (into {} (for [tx (vals txs), d tx]
+                            [[(:ea d) (:vk d)] (select-keys d [:e :a :v])]))
+        children (frequencies (mapcat :parents (vals commits)))
+        keep? (set roots)
+        empty-state {:closure #{} :live {} :open {}}
+        {:keys [states]}
+        (reduce
+         (fn [{:keys [states pending]} [root commit]]
+           (let [merge? (identity/merge-commit? commit)
+                 base (if merge?
+                        (merge-step digest schema registry commits states
+                                    root commit)
+                        (update (get states (first (:parents commit)) empty-state)
+                                :closure conj root))
+                 state (reduce-kv
+                        (fn [state i d]
+                          (let [dot [root i]
+                                own [(:epoch commit) root i]
+                                rank (if (and merge? (= :assert (:op d)))
+                                       (or (some-> (get-in state [:live (:ea d) (:vk d)])
+                                                   not-empty max-rank)
+                                           own)
+                                       own)]
+                            (apply-event schema state d dot rank)))
+                        base (get txs root))
+                 pending (reduce #(update %1 %2 dec) pending (:parents commit))
+                 drop (filter #(and (zero? (get pending %)) (not (keep? %)))
+                              (:parents commit))]
+             {:states (apply dissoc (assoc states root state) drop)
+              :pending pending}))
+         {:states {} :pending children}
+         order)]
+    {:commits commits :registry registry :states states :roots roots}))
 
 ;; ---------------------------------------------------------------------------
 ;; Public
-
-(defn- same-field! [commits heads field]
-  (let [values (set (map #(get-in commits [% field]) heads))]
-    (when-not (= 1 (count values))
-      (reject! :incompatible-heads
-               (str "merge heads disagree on " (name field))
-               {:field field :values values}))))
 
 (defn merge
   "Deterministically merge HEADS.
 
   Options:
   - `:graph`  {root {:commit logical-commit :tx tx-data}} covering the full
-    ancestor closure of every head (to genesis).
-  - `:heads`  roots to merge, in any order, duplicates allowed.
+    ancestor closure of every head (to its single genesis).
+  - `:heads`  roots to merge, in any order, duplicates allowed (at most
+    `identity/max-merge-parents` distinct roots).
   - `:schema` {attr {:db/cardinality .. :db/unique ..}} for the heads'
-    common `:schema-root`; the caller binds it to that root.
+    common `:schema-root`; the caller binds it to that root. Every ancestor
+    must carry the same `:schema-root`.
   - `:digest` (fn [canonical-string] -> CID string), the same digest used to
     address the graph.
+  - `:max-closure` bound on walked commits (default `default-max-closure`).
+
+  Every v2 commit in the closure is recomputed and must match, so a forged
+  inner merge cannot be laundered by an honest outer one.
 
   Returns `{:status :fast-forward :root r}` when one head already contains
   the others, otherwise `{:status :merged :root :commit :tx :datoms
   :conflicts :bases :heads}`. The result depends only on the set of heads:
   argument order and duplicates cannot change the merge commit's CID."
-  [{:keys [graph heads schema digest]}]
+  [{:keys [graph heads schema digest max-closure]
+    :or {max-closure default-max-closure}}]
   (when-not (fn? digest)
     (reject! :invalid-digest "merge requires a digest function" {}))
   (when-not (and (sequential? heads) (seq heads))
     (reject! :invalid-heads "merge requires at least one head" {:heads heads}))
-  (let [{:keys [commits closure]} (ancestry graph digest heads)
-        heads (reduce-heads closure heads)]
-    (if (= 1 (count heads))
-      {:status :fast-forward :root (first heads) :heads heads}
-      (do
-        (when (< identity/max-merge-parents (count heads))
-          (reject! :too-many-parents "merge exceeds max-merge-parents"
-                   {:count (count heads) :max identity/max-merge-parents}))
-        (doseq [field [:database-id :schema-root :model-contract-root
-                       :admission-policy-root]]
-          (same-field! commits heads field))
-        (let [{:keys [datoms tx conflicts]}
-              (resolve-state schema closure (events graph commits))
-              head-commit (get commits (first heads))
-              commit {:format identity/merge-commit-format
-                      :merge-policy identity/merge-policy
-                      :database-id (:database-id head-commit)
-                      :epoch (inc (apply max (map #(:epoch (get commits %))
-                                                  heads)))
-                      :parents heads
-                      :tx-root (digest (canonical/transaction-string tx))
-                      :logical-checkpoint-root
-                      (digest (canonical/checkpoint-string datoms))
-                      :schema-root (:schema-root head-commit)
-                      :model-contract-root (:model-contract-root head-commit)
-                      :admission-policy-root
-                      (:admission-policy-root head-commit)}]
-          {:status :merged
-           :root (digest (identity/logical-commit-string commit))
-           :commit (identity/logical-commit commit)
-           :tx tx
-           :datoms datoms
-           :conflicts conflicts
-           :bases (merge-bases closure heads)
-           :heads heads})))))
+  (let [distinct-heads (identity/canonical-parents heads)]
+    (when (< identity/max-merge-parents (count distinct-heads))
+      (reject! :too-many-parents "merge exceeds max-merge-parents"
+               {:count (count distinct-heads) :max identity/max-merge-parents}))
+    (let [{:keys [commits registry states]}
+          (replay graph digest schema distinct-heads max-closure)
+          closure (into {} (map (fn [h] [h (:closure (get states h))]))
+                        distinct-heads)
+          heads (reduce-heads closure distinct-heads)]
+      (if (= 1 (count heads))
+        {:status :fast-forward :root (first heads) :heads heads}
+        (do
+          (check-heads! commits heads)
+          (let [{:keys [datoms tx conflicts]}
+                (resolve-state schema registry
+                               (merge-states (map #(get states %) heads)))
+                commit (merge-commit digest (map #(get commits %) heads)
+                                     heads tx datoms)]
+            {:status :merged
+             :root (digest (identity/logical-commit-string commit))
+             :commit commit
+             :tx tx
+             :datoms datoms
+             :conflicts conflicts
+             :bases (merge-bases commits closure heads)
+             :heads heads}))))))
 
 (defn state
-  "Visible datoms at ROOT under the same causal semantics `merge` uses.
-  For a v1 linear chain this is ordinary replay."
-  [{:keys [graph root schema digest]}]
-  (let [{:keys [commits closure]} (ancestry graph digest [root])]
-    (:datoms (resolve-state schema closure (events graph commits)))))
+  "Visible datoms at ROOT under the same causal semantics `merge` uses, after
+  verifying every merge commit in its ancestry. For a v1 linear chain this is
+  ordinary replay. Accepts `:max-closure` like `merge`."
+  [{:keys [graph root schema digest max-closure]
+    :or {max-closure default-max-closure}}]
+  (let [{:keys [registry states]} (replay graph digest schema [root] max-closure)]
+    (:datoms (resolve-state schema registry (get states root)))))
 
 (defn verify-merge
   "Recompute the v2 commit at ROOT from its parents and require identical
-  bytes. A merge commit whose resolution, epoch, checkpoint, or parent set
-  (including a redundant ancestor parent) differs from the deterministic
-  result is rejected. Returns the recomputed merge result."
-  [{:keys [graph root schema digest]}]
+  bytes, recursively for every v2 commit in its ancestry. A merge commit whose
+  resolution, epoch, checkpoint, or parent set (including a redundant ancestor
+  parent) differs from the deterministic result is rejected. Returns the
+  recomputed merge result."
+  [{:keys [graph root schema digest max-closure]
+    :or {max-closure default-max-closure}}]
   (let [{:keys [commit tx]} (entry graph root)
         _ (verify-entry! digest root (entry graph root))
         _ (when-not (identity/merge-commit? commit)
             (reject! :not-a-merge "verify-merge requires a v2 commit"
                      {:root root}))
         result (merge {:graph graph :heads (:parents commit)
-                       :schema schema :digest digest})]
+                       :schema schema :digest digest
+                       :max-closure max-closure})]
     (when-not (and (= :merged (:status result))
                    (= root (:root result))
                    (= (canonical/normalize-tx tx) (:tx result)))

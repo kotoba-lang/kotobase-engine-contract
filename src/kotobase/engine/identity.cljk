@@ -35,12 +35,21 @@
 (defn- invalid! [message data]
   (throw (ex-info message (assoc data :type :kotobase.engine/invalid-identity))))
 
+(defn- ascii-cid? [x]
+  (and (string? x) (some? (re-matches #"[\x21-\x7e]+" x))))
+
 (defn canonical-parents
   "The only admissible v2 parent encoding: distinct CID strings in ascending
   string (CID byte) order. Constructors call this; validators reject anything
   that is not already in this form rather than silently normalizing a value a
-  signer may have signed in another order."
+  signer may have signed in another order.
+
+  Parents must be printable ASCII (multibase CID alphabet), because only then
+  is host string order equal to CID byte order on every runtime."
   [parents]
+  (when-not (every? ascii-cid? parents)
+    (invalid! "parent CIDs must be nonblank printable ASCII strings"
+              {:parents parents}))
   (vec (sort (distinct parents))))
 
 (defn- validate-common! [{:keys [database-id epoch] :as commit}]

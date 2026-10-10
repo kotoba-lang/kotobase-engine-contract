@@ -26,21 +26,46 @@
     (catch js/Error error
       (:problem (ex-data error)))))
 
-(defn- add [graph parents tx]
+(defn- add*
+  "Install a v1 commit. OVERRIDES replaces commit fields after the honest
+  defaults are computed, so tests can forge epochs or provenance."
+  [graph parents tx overrides]
   (let [epoch (if (seq parents)
                 (inc (apply max (map #(get-in graph [% :commit :epoch])
                                      parents)))
                 0)
         tx-root (digest (canonical/transaction-string tx))
-        commit {:format identity/logical-commit-format
-                :database-id "tenant/db"
-                :epoch epoch
-                :parents (vec parents)
-                :tx-root tx-root
-                :logical-checkpoint-root (str "checkpoint-" tx-root)
-                :schema-root "schema-1"
-                :model-contract-root "model-1"
-                :admission-policy-root "policy-1"}
+        commit (into {:format identity/logical-commit-format
+                      :database-id "tenant/db"
+                      :epoch epoch
+                      :parents (vec parents)
+                      :tx-root tx-root
+                      :logical-checkpoint-root (str "checkpoint-" tx-root)
+                      :schema-root "schema-1"
+                      :model-contract-root "model-1"
+                      :admission-policy-root "policy-1"}
+                     overrides)
+        root (digest (identity/logical-commit-string commit))]
+    [(assoc graph root {:commit commit :tx tx}) root]))
+
+(defn- add [graph parents tx]
+  (add* graph parents tx {}))
+
+(defn- add-v2
+  "Install an arbitrary (possibly forged) v2 commit over PARENTS."
+  [graph parents tx overrides]
+  (let [commit (into {:format identity/merge-commit-format
+                      :merge-policy identity/merge-policy
+                      :database-id "tenant/db"
+                      :epoch (inc (apply max (map #(get-in graph [% :commit :epoch])
+                                                  parents)))
+                      :parents (identity/canonical-parents parents)
+                      :tx-root (digest (canonical/transaction-string tx))
+                      :logical-checkpoint-root "checkpoint-forged"
+                      :schema-root "schema-1"
+                      :model-contract-root "model-1"
+                      :admission-policy-root "policy-1"}
+                     overrides)
         root (digest (identity/logical-commit-string commit))]
     [(assoc graph root {:commit commit :tx tx}) root]))
 
@@ -296,8 +321,16 @@
 ;; ---------------------------------------------------------------------------
 ;; Frontier
 
-(defn- frontier-entry [graph root]
-  {:root root :commit (get-in graph [root :commit])})
+(defn- frontier-entry
+  "A proof entry. A v2 entry carries every parent's entry so the verifier can
+  check the merge epoch against all of them."
+  [graph root]
+  (let [commit (get-in graph [root :commit])]
+    (cond-> {:root root :commit commit}
+      (identity/merge-commit? commit)
+      (assoc :parent-entries (mapv (fn [p] {:root p
+                                            :commit (get-in graph [p :commit])})
+                                   (:parents commit))))))
 
 (defn- verified? [{:keys [root commit]}]
   (= root (digest (identity/logical-commit-string commit))))
@@ -358,17 +391,240 @@
     (let [forged-merge (assoc (:commit m) :epoch 1)
           child (assoc (get-in graph [a2 :commit]) :epoch 2
                        :parents ["forged-merge"])]
-      (is (= :noncontiguous-epoch
+      (is (= :invalid-epoch
              (problem-of
               #(frontier/accept-head
                 {:last-seen (seen graph b) :candidate-root "child"
                  :path [{:root "child" :commit child}
-                        {:root "forged-merge" :commit forged-merge}]
+                        (assoc (frontier-entry graph (:root m))
+                               :root "forged-merge" :commit forged-merge)]
                  :verify-entry (constantly true)})))
-          "a merge edge must still strictly decrease the epoch"))
+          "a merge epoch must be 1 + max(parent epochs)"))
     (is (= :not-descendant
            (problem-of
             #(frontier/accept-head
               {:last-seen (seen graph other) :candidate-root (:root m)
                :path [(frontier-entry graph (:root m))]
                :verify-entry verified?}))))))
+
+;; ---------------------------------------------------------------------------
+;; Review regressions (PR #9)
+
+(def ^:private max-safe 9007199254740991)
+
+(deftest frontier-merge-step-verifies-every-parent
+  ;; Finding 1: a merge edge used to check only last-seen ∈ parents and
+  ;; epoch > last, so the other parents and the epoch claim were unverified.
+  (let [[graph gen] (add {} [] [])
+        [graph x] (add graph [gen] [[:db/add "x" :doc/tag "1"]])
+        [graph y] (add graph [gen] [[:db/add "y" :doc/tag "1"]])
+        [graph y2] (add graph [y] [[:db/add "y" :doc/tag "2"]])
+        [graph y3] (add graph [y2] [[:db/add "y" :doc/tag "3"]])
+        accept (fn [graph candidate & [opts]]
+                 (frontier/accept-head
+                  (into {:last-seen (seen graph x) :candidate-root candidate
+                         :path [(frontier-entry graph candidate)]
+                         :verify-entry verified?}
+                        opts)))]
+    (testing "inflated epoch over a nonexistent parent (reviewer probe 3)"
+      (let [[graph evil] (add-v2 graph [x gen] [] {:epoch max-safe
+                                                   :parents (identity/canonical-parents
+                                                             [x "bafyzzzz-nonexistent"])})
+            bare {:root evil :commit (get-in graph [evil :commit])}]
+        (is (= :invalid-proof
+               (problem-of #(frontier/accept-head
+                             {:last-seen (seen graph x) :candidate-root evil
+                              :path [bare] :verify-entry verified?})))
+            "a merge entry without parent entries is rejected")
+        (is (= :unverified-commit
+               (problem-of
+                #(frontier/accept-head
+                  {:last-seen (seen graph x) :candidate-root evil
+                   :path [(assoc bare :parent-entries
+                                 (mapv (fn [p] {:root p :commit (get-in graph [x :commit])})
+                                       (get-in graph [evil :commit :parents])))]
+                   :verify-entry verified?})))
+            "a parent entry that fails CID/signature verification is rejected")))
+    (testing "inflated epoch over verified parents"
+      (let [[graph evil] (add-v2 graph [x y3] [] {:epoch max-safe})]
+        (is (= :invalid-epoch (problem-of #(accept graph evil))))))
+    (testing "understated epoch = last+1 with a higher-epoch other parent (probe 4)"
+      (let [[graph lie] (add-v2 graph [x y3] [] {:epoch 2})]
+        (is (= :invalid-epoch (problem-of #(accept graph lie))))))
+    (testing "other parent from another database"
+      (let [[graph z] (add* graph [gen] [] {:database-id "other/db"})
+            [graph m] (add-v2 graph [x z] [] {})]
+        (is (= :database-mismatch (problem-of #(accept graph m))))))
+    (testing "an honest merge with a long other branch is accepted"
+      (let [m (run-merge graph [x y3])
+            graph (install graph m)
+            result (accept graph (:root m))]
+        (is (= :advanced (:status result)))
+        (is (= 3 (:distance result)))
+        (testing "but the epoch skip is bounded"
+          (is (= :epoch-skip-too-large
+                 (problem-of #(accept graph (:root m) {:max-epoch-skip 1})))))))
+    (testing "honest commits still advance after a rejected attack"
+      (let [[graph x2] (add graph [x] [])]
+        (is (= :advanced (:status (accept graph x2))))))))
+
+(deftest frontier-reports-every-merge-on-the-path
+  ;; Finding 9: merges inside the path are reported, not only the candidate.
+  (let [{:keys [graph a b]} (fork [] [[:db/add "a" :doc/tag "1"]]
+                                  [[:db/add "b" :doc/tag "1"]])
+        m (run-merge graph [a b])
+        graph (install graph m)
+        [graph c] (add graph [(:root m)] [[:db/add "c" :doc/tag "1"]])
+        result (frontier/accept-head
+                {:last-seen (seen graph a) :candidate-root c
+                 :path [(frontier-entry graph c) (frontier-entry graph (:root m))]
+                 :verify-entry verified?})]
+    (is (= :advanced (:status result)))
+    (is (nil? (:merge-parents result)))
+    (is (= [{:root (:root m) :parents (sort [a b])}] (:merges result)))))
+
+(deftest verify-merge-verifies-nested-merges
+  ;; Finding 2: a forged inner merge was laundered by an honest outer merge.
+  (let [[graph gen] (add {} [] [[:db/add "e" :doc/tag "keep"]])
+        [graph a] (add graph [gen] [])
+        [graph b] (add graph [gen] [[:db/add "x" :doc/tag "1"]])
+        [graph forged] (add-v2 graph [a b] [[:db/retract "e" :doc/tag "keep"]] {})
+        [graph c] (add graph [gen] [[:db/add "y" :doc/tag "1"]])]
+    (is (= :merge-mismatch
+           (problem-of #(merge/verify-merge {:graph graph :root forged
+                                             :schema schema :digest digest}))))
+    (is (= :merge-mismatch (problem-of #(run-merge graph [forged c])))
+        "merge refuses a closure that contains an unverifiable v2 commit")
+    (is (= :merge-mismatch (problem-of #(state-at graph forged))))))
+
+(deftest ancestry-provenance-is-enforced
+  ;; Finding 3 / 8 / 10.
+  (testing "a parentless commit must be at epoch 0 (probe 5)"
+    (let [[graph gen] (add {} [] [[:db/add "e" :doc/status "orig"]])
+          [graph a] (add graph [gen] [[:db/add "e" :doc/status "honest"]])
+          [graph evil] (add* graph [] [[:db/add "e" :doc/status "evil"]]
+                             {:epoch 1000000})]
+      (is (= :invalid-epoch (problem-of #(run-merge graph [a evil]))))))
+  (testing "unrelated histories do not merge"
+    (let [[graph g1] (add {} [] [[:db/add "e" :doc/tag "1"]])
+          [graph g2] (add graph [] [[:db/add "e" :doc/tag "2"]])
+          [graph a] (add graph [g1] [])
+          [graph b] (add graph [g2] [])]
+      (is (= :unrelated-histories (problem-of #(run-merge graph [a b]))))))
+  (testing "an ancestor from another database is rejected (probe 6)"
+    (let [[graph gen] (add* {} [] [[:db/add "secret" :doc/tag "other-db"]]
+                            {:database-id "other/db"})
+          [graph a] (add graph [gen] [])
+          [graph b] (add graph [gen] [[:db/add "b" :doc/tag "1"]])]
+      (is (= :database-mismatch (problem-of #(run-merge graph [a b]))))))
+  (testing "an ancestor under another schema root is rejected (finding 8)"
+    (let [[graph gen] (add* {} [] [] {:schema-root "schema-0"})
+          [graph a] (add graph [gen] [])
+          [graph b] (add graph [gen] [[:db/add "b" :doc/tag "1"]])]
+      (is (= :incompatible-history (problem-of #(run-merge graph [a b]))))
+      (is (= :incompatible-history (problem-of #(state-at graph a))))))
+  (testing "a child below its parent's epoch is :invalid-epoch, not :cycle"
+    (let [[graph gen] (add {} [] [])
+          [graph a] (add graph [gen] [])
+          [graph a2] (add graph [a] [])
+          [graph low] (add* graph [a2] [] {:epoch 1})
+          [graph b] (add graph [gen] [[:db/add "b" :doc/tag "1"]])]
+      (is (= :invalid-epoch (problem-of #(run-merge graph [low b]))))))
+  (testing "v2 parents must be ASCII CID strings"
+    (is (= :kotobase.engine/invalid-identity
+           (:type (try (identity/canonical-parents ["bafyé" "bafya"]) nil
+                       (catch js/Error e (ex-data e))))))))
+
+(deftest re-assertions-keep-the-original-stamp
+  ;; Finding 4 (probe 2): a merge re-assertion used to get the merge's own
+  ;; stamp, so (A ∪ B) ∪ C differed from A ∪ B ∪ C.
+  ;; A's retraction sits high (epoch 3) so the (A,B) merge lands at epoch 4,
+  ;; above C's write at epoch 2, while B's original assertion is at epoch 1.
+  (let [[graph gen] (add {} [] [[:db/add "e" :doc/status "s"]])
+        [graph a1] (add graph [gen] [[:db/add "pad-a" :doc/tag "1"]])
+        [graph a2] (add graph [a1] [[:db/add "pad-a" :doc/tag "2"]])
+        [graph a] (add graph [a2] [[:db/retract "e" :doc/status "s"]])
+        [graph b] (add graph [gen] [[:db/add "e" :doc/status "s"]])
+        [graph c1] (add graph [gen] [[:db/add "pad" :doc/tag "1"]])
+        [graph c2] (add graph [c1] [[:db/add "e" :doc/status "c"]])
+        status (fn [m] (set (keep #(when (= :doc/status (:a %)) (:v %)) (:datoms m))))
+        three (run-merge graph [a b c2])
+        ab (run-merge graph [a b])
+        graph (install graph ab)
+        ab-c (run-merge graph [(:root ab) c2])
+        bc (run-merge graph [b c2])
+        graph (install graph bc)
+        a-bc (run-merge graph [a (:root bc)])]
+    (is (= #{"c"} (status three)))
+    (is (= (status three) (status ab-c) (status a-bc))
+        "merge result does not depend on merge topology")))
+
+(deftest cardinality-one-falls-back-when-the-winner-loses-uniqueness
+  ;; Finding 5 (probe 1): alice used to lose both values.
+  (let [[graph gen] (add {} [] [])
+        [graph b] (add graph [gen] [[:db/add "bob" :user/email "x"]
+                                    [:db/add "alice" :user/email "y"]])
+        [graph a1] (add graph [gen] [[:db/add "z" :doc/tag "pad"]])
+        [graph a2] (add graph [a1] [[:db/add "alice" :user/email "x"]])
+        m (run-merge graph [a2 b])
+        graph (install graph m)]
+    (is (= #{["bob" :user/email "x"] ["alice" :user/email "y"]
+             ["z" :doc/tag "pad"]}
+           (set (map (juxt :e :a :v) (:datoms m)))))
+    (is (= [{:e "alice" :a :user/email :v "x" :op :retract}] (:tx m)))
+    (is (= [{:kind :unique :a :user/email :v "x" :winner "bob" :winner-commit b
+             :losers ["alice"] :rule :earliest-stamp}]
+           (:conflicts m)))
+    (is (= (:root m) (:root (merge/verify-merge {:graph graph :root (:root m)
+                                                 :schema schema :digest digest}))))))
+
+(deftest datoms-are-keyed-by-canonical-value
+  ;; Finding 6 (probe 3): [1 2] and (1 2) are different canonical values.
+  (let [{:keys [graph a b]} (fork [] [[:db/add "e" :doc/tag [1 2]]]
+                                  [[:db/add "e" :doc/tag (list 1 2)]])
+        ab (run-merge graph [a b])
+        ba (run-merge graph [b a])]
+    (is (= (:root ab) (:root ba)))
+    (is (= 2 (count (:datoms ab)))))
+  (let [{:keys [graph a b]} (fork [[:db/add "e" :doc/tag [1 2]]]
+                                  [[:db/retract "e" :doc/tag (list 1 2)]]
+                                  [])]
+    (is (= [[:vector [[:integer 1] [:integer 2]]]]
+           (map (comp canonical/canonical-value :v) (:datoms (run-merge graph [a b]))))
+        "retracting (1 2) does not remove [1 2]")))
+
+(defn- chain [n]
+  (reduce (fn [[graph root] i]
+            (add graph (if root [root] [])
+                 [[:db/add "e" :doc/status (str "v" i)]
+                  [:db/add "e" :doc/tag (str "t" (mod i 7))]
+                  [:db/retract "e" :doc/tag (str "t" (mod (inc i) 7))]]))
+          [{} nil] (range n)))
+
+(deftest merge-is-bounded-and-near-linear
+  ;; Finding 7 (probe 2): 2000 commits took ~1s and quadrupled per doubling.
+  (testing "head count is checked before walking"
+    (is (= :too-many-parents
+           (problem-of #(run-merge {} (mapv (fn [i] (str "bafy-missing-" i))
+                                            (range 17)))))))
+  (testing "the closure size is capped and fails closed"
+    (let [[graph root] (chain 50)]
+      (is (= :closure-too-large
+             (problem-of #(merge/state {:graph graph :root root :schema schema
+                                        :digest digest :max-closure 10}))))))
+  (testing "replay scales ~linearly with a hot attribute"
+    ;; The quadratic implementation took ~0.3 s at 1000 and ~4.7 s at 4000
+    ;; commits (~15x); a linear replay grows ~4x. The bound is a ratio, not a
+    ;; wall-clock budget, so a slow CI host does not make it flaky.
+    (let [timed (fn [n]
+                  (let [[graph root] (chain n)
+                        t0 (js/Date.now)
+                        s (merge/state {:graph graph :root root :schema schema
+                                        :digest digest})]
+                    [(- (js/Date.now) t0) s]))
+          [small _] (timed 1000)
+          [large s] (timed 4000)]
+      (is (= #{["e" :doc/status "v3999"]}
+             (set (keep #(when (= :doc/status (:a %)) ((juxt :e :a :v) %)) s))))
+      (is (< large (+ 50 (* 8 small)))
+          (str "1000 commits: " small " ms, 4000 commits: " large " ms")))))

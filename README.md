@@ -49,9 +49,14 @@ ancestor closure, a schema and the injected digest, `merge` returns either a
 fast-forward or one v2 merge commit whose resolution transaction explicitly
 retracts every cardinality-one / `:db/unique` loser and re-asserts every datom
 kept against a concurrent retraction. Argument order, duplicates and ancestor
-heads cannot change the result, and `verify-merge` recomputes a published
-merge byte-for-byte. `accept-head` treats a merge as an ordinary descendant,
-so a merge naming both equivocating heads advances either observer.
+heads cannot change the result. The closure must have a single genesis at
+epoch 0, exact epochs, one `:database-id` and one `:schema-root`, and is
+bounded by `:max-closure`. Every v2 commit in the closure is recomputed during
+the (linear) replay, so `merge`, `state` and `verify-merge` verify nested
+merges recursively. `accept-head` treats a merge as an ordinary descendant
+once its proof entry carries every parent (`:parent-entries`) and its epoch
+is exactly 1 + max(parent epochs), so a merge naming both equivocating heads
+advances either observer.
 
 `checkpoint` and physical maintenance are deliberately different contracts.
 A checkpoint computes a logical-state commitment and may leave the physical
