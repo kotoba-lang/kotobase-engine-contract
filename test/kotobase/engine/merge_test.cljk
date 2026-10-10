@@ -628,3 +628,204 @@
              (set (keep #(when (= :doc/status (:a %)) ((juxt :e :a :v) %)) s))))
       (is (< large (+ 50 (* 8 small)))
           (str "1000 commits: " small " ms, 4000 commits: " large " ms")))))
+
+;; ---------------------------------------------------------------------------
+;; Round-2 review regressions
+
+(defn- datom-keys [datoms]
+  (set (map canonical/logical-datom-key datoms)))
+
+(deftest losers-are-deduplicated-by-canonical-value
+  ;; R2 major 1: `distinct` on retraction maps used host equality, so of
+  ;; [1 2] and (1 2) only one loser was retracted and the other resurfaced.
+  (let [[graph gen] (add {} [] [])
+        [graph a] (add graph [gen] [[:db/add "e" :doc/status [1 2]]])
+        [graph b] (add graph [gen] [[:db/add "e" :doc/status (list 1 2)]])
+        [graph c0] (add graph [gen] [])
+        [graph c] (add graph [c0] [[:db/add "e" :doc/status "zz"]])
+        m (run-merge graph [a b c])
+        graph (install graph m)]
+    (is (= 2 (count (:tx m))) "both canonical values are retracted")
+    (is (= #{(canonical/logical-datom-key {:e "e" :a :doc/status :v [1 2]})
+             (canonical/logical-datom-key {:e "e" :a :doc/status :v (list 1 2)})}
+           (datom-keys (:tx m))))
+    (is (= [["e" :doc/status "zz"]] (map (juxt :e :a :v) (:datoms m))))
+    (let [[graph x] (add graph [(:root m)] [[:db/add "p" :doc/tag "1"]])
+          [graph y] (add graph [(:root m)] [[:db/add "q" :doc/tag "1"]])
+          m2 (run-merge graph [x y])]
+      (is (= [] (:tx m2)))
+      (is (= [] (:conflicts m2))))
+    (let [[graph x] (add graph [(:root m)] [[:db/retract "e" :doc/status "zz"]])]
+      (is (= #{} (state-at graph x)) "a retracted loser does not resurface")))
+  (testing "unique losers whose entity ids differ only by collection type"
+    (let [[graph gen] (add {} [] [])
+          [graph c] (add graph [gen] [[:db/add "first" :user/email "x"]])
+          [graph a1] (add graph [gen] [[:db/add "pad-a" :doc/tag "1"]])
+          [graph a] (add graph [a1] [[:db/add [1 2] :user/email "x"]])
+          [graph b1] (add graph [gen] [[:db/add "pad-b" :doc/tag "1"]])
+          [graph b] (add graph [b1] [[:db/add (list 1 2) :user/email "x"]])
+          m (run-merge graph [a b c])]
+      (is (= 2 (count (:tx m))))
+      (is (= #{["first" :user/email "x"]}
+             (set (keep #(when (= :user/email (:a %)) ((juxt :e :a :v) %))
+                        (:datoms m))))))))
+
+(deftest verify-merge-compares-tx-canonically
+  (let [{:keys [graph a b]} (fork [] [[:db/add "e" :doc/tag [1 2]]]
+                                  [[:db/retract "e" :doc/tag [1 2]]])
+        m (run-merge graph [a b])]
+    ;; Host equality would accept a stored tx spelling (1 2) for [1 2]; the
+    ;; root binds the bytes, and the comparison must agree with the root.
+    (is (= (canonical/transaction-string (:tx m))
+           (canonical/transaction-string
+            (:tx (merge/verify-merge {:graph (install graph m) :root (:root m)
+                                      :schema schema :digest digest})))))))
+
+(deftest merge-order-is-deterministic-but-not-associative
+  ;; R2 major 3: documented counterexamples. Replicas converge for the same
+  ;; merge DAG; a different merge order may legitimately give a different
+  ;; state when an intermediate merge decides a conflict whose winner is
+  ;; concurrently retracted (the loser's retraction is permanent).
+  (let [view (fn [graph m]
+               (if (= :merged (:status m))
+                 (datom-keys (:datoms m))
+                 (datom-keys (merge/state {:graph graph :root (:root m)
+                                           :schema schema :digest digest}))))]
+    (testing "pure cardinality-one"
+      (let [[graph gen] (add {} [] [])
+            [graph x1] (add graph [gen] [[:db/add "p" :doc/tag "1"]])
+            [graph x] (add graph [x1] [[:db/add "e" :doc/status "w"]])
+            [graph y] (add graph [gen] [[:db/add "e" :doc/status "l"]])
+            [graph c] (add graph [x] [[:db/retract "e" :doc/status "w"]])
+            three (run-merge graph [x y c])
+            ab (run-merge graph [x y])
+            g2 (install graph ab)
+            ab-c (run-merge g2 [(:root ab) c])]
+        (is (= three (run-merge graph [c y x c])) "same heads, same result")
+        (is (= ab-c (run-merge g2 [c (:root ab)])))
+        (is (contains? (view graph three)
+                       (canonical/logical-datom-key {:e "e" :a :doc/status :v "l"}))
+            "{x,y,c}: w was retracted by c, so l survives")
+        (is (not (contains? (view g2 ab-c)
+                            (canonical/logical-datom-key {:e "e" :a :doc/status :v "l"})))
+            "(x∪y)∪c: the first merge already retracted l for w")))
+    (testing "pure uniqueness on a cardinality-many attribute"
+      (let [schema (assoc schema :user/handle {:db/cardinality :db.cardinality/many
+                                               :db/unique :db.unique/value})
+            mrg (fn [graph heads] (merge/merge {:graph graph :heads heads
+                                                :schema schema :digest digest}))
+            [graph gen] (add {} [] [[:db/add "e3" :user/handle "h"]])
+            [graph a] (add graph [gen] [[:db/retract "e3" :user/handle "h"]])
+            [graph b] (add graph [gen] [[:db/add "e2" :user/handle "h"]])
+            [graph c] (add graph [gen] [[:db/add "pad" :doc/tag "1"]])
+            three (mrg graph [a b c])
+            bc (mrg graph [b c])
+            g2 (install graph bc)
+            a-bc (mrg g2 [a (:root bc)])
+            e2h (canonical/logical-datom-key {:e "e2" :a :user/handle :v "h"})]
+        (is (= three (mrg graph [c b a])))
+        (is (= a-bc (mrg g2 [(:root bc) a])))
+        (is (contains? (datom-keys (:datoms three)) e2h)
+            "{a,b,c}: e3 released h, so e2 keeps it")
+        (is (not (contains? (datom-keys (:datoms a-bc)) e2h))
+            "a∪(b∪c): b∪c already retracted e2's claim for e3")))))
+
+(deftest frontier-bounds-total-epoch-skip
+  ;; R2 minor 4: the skip bound was per edge only.
+  (let [[graph gen] (add {} [] [])
+        [graph x] (add graph [gen] [])
+        step (fn [[graph cur] i]
+               (let [[graph p] (add* graph ["bafy-unrelated"] [[:db/add (str "p" i) :doc/tag "1"]]
+                                     {:epoch (+ 8 (get-in graph [cur :commit :epoch]))})
+                     [graph m] (add-v2 graph [cur p] [] {})]
+                 [graph m]))
+        [graph m1] (step [graph x] 1)
+        [graph m2] (step [graph m1] 2)
+        accept (fn [opts]
+                 (frontier/accept-head
+                  (into {:last-seen (seen graph x) :candidate-root m2
+                         :path [(frontier-entry graph m2) (frontier-entry graph m1)]
+                         :verify-entry verified?}
+                        opts)))]
+    (is (= 18 (:distance (accept {:max-epoch-skip 16}))) "2 edges + 16 skipped")
+    (is (= :epoch-skip-too-large (problem-of #(accept {:max-epoch-skip 10})))
+        "each edge skips 8 <= 10, but the path skips 16 > 10")))
+
+(defn- ladder
+  "N rounds of fork + merge; each side replaces the previous round's datom,
+  so the visible state stays constant while merges accumulate. The merges
+  are conflict-free, so they are written directly (tx [] and the known
+  checkpoint) instead of calling `merge` per round, which would itself
+  replay the whole history every round."
+  [n]
+  (loop [i 0 [graph cur] (add {} [] [[:db/add "x" :doc/tag "x-0"]
+                                     [:db/add "y" :doc/tag "y-0"]])]
+    (if (= i n)
+      [graph cur]
+      (let [[graph x] (add graph [cur] [[:db/retract "x" :doc/tag (str "x-" i)]
+                                        [:db/add "x" :doc/tag (str "x-" (inc i))]])
+            [graph y] (add graph [cur] [[:db/retract "y" :doc/tag (str "y-" i)]
+                                        [:db/add "y" :doc/tag (str "y-" (inc i))]])
+            datoms [{:e "x" :a :doc/tag :v (str "x-" (inc i))}
+                    {:e "y" :a :doc/tag :v (str "y-" (inc i))}]]
+        (recur (inc i)
+               (add-v2 graph [x y] []
+                       {:logical-checkpoint-root
+                        (digest (canonical/checkpoint-string datoms))}))))))
+
+(deftest many-merges-are-bounded-and-scale
+  ;; R2 major 2: each merge step used to union full ancestor closures and
+  ;; re-join every retraction tombstone of a touched attribute, and the total
+  ;; work over many merges had no budget.
+  (let [[graph root] (ladder 1000)]
+    (testing "an explicit work budget fails closed"
+      (is (= :work-budget-exceeded
+             (problem-of #(merge/state {:graph graph :root root :schema schema
+                                        :digest digest :max-work 500}))))
+      (is (= 2 (count (merge/state {:graph graph :root root :schema schema
+                                    :digest digest})))))
+    (testing "constant state: replay time grows ~linearly with merges"
+      (let [[small-graph small-root] (ladder 250)
+            timed (fn [graph root]
+                    (let [t0 (js/Date.now)]
+                      (merge/state {:graph graph :root root :schema schema
+                                    :digest digest})
+                      (- (js/Date.now) t0)))
+            small (timed small-graph small-root)
+            large (timed graph root)]
+        ;; Round-1 code: 438 -> 3993 ms (~9x); linear join: ~3-4x.
+        (is (< large (+ 50 (* 6 small)))
+            (str "250 merges: " small " ms, 1000 merges: " large " ms"))))))
+
+(deftest options-and-heads-fail-closed
+  (is (= :invalid-heads (problem-of #(run-merge {} ["bafyé" "bafya"]))))
+  (is (= :kotobase.merge/rejected
+         (:type (try (run-merge {} ["bafyé" "bafya"]) nil
+                     (catch js/Error e (ex-data e))))))
+  (let [[graph root] (chain 3)]
+    (is (= :invalid-option
+           (problem-of #(merge/state {:graph graph :root root :schema schema
+                                      :digest digest :max-closure nil}))))
+    (is (= :invalid-option
+           (problem-of #(merge/state {:graph graph :root root :schema schema
+                                      :digest digest :max-work -1})))))
+  (let [[graph gen] (add {} [] [])
+        [graph x] (add graph [gen] [])
+        [graph x2] (add graph [x] [])]
+    (is (= :invalid-option
+           (problem-of #(frontier/accept-head
+                         {:last-seen (seen graph x) :candidate-root x2
+                          :path [(frontier-entry graph x2)]
+                          :verify-entry verified? :max-epoch-skip nil}))))))
+
+(deftest checkpoint-fragments-are-byte-identical
+  (let [datoms [{:e "b" :a :doc/tag :v [1 2]}
+                {:e "b" :a :doc/tag :v (list 1 2)}
+                {:e [1 "x"] :a :user/email :v "a@example"}
+                {:e "a" :a :doc/status :v {:k #{1 2} :s nil}}]
+        sorted (sort-by canonical/logical-datom-key datoms)]
+    (is (= (canonical/checkpoint-string datoms)
+           (canonical/checkpoint-string-from-fragments
+            (map canonical/checkpoint-datom-fragment sorted))))
+    (is (= (canonical/checkpoint-string [])
+           (canonical/checkpoint-string-from-fragments [])))))

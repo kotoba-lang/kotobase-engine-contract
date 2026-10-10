@@ -51,9 +51,11 @@ retracts every cardinality-one / `:db/unique` loser and re-asserts every datom
 kept against a concurrent retraction. Argument order, duplicates and ancestor
 heads cannot change the result. The closure must have a single genesis at
 epoch 0, exact epochs, one `:database-id` and one `:schema-root`, and is
-bounded by `:max-closure`. Every v2 commit in the closure is recomputed during
-the (linear) replay, so `merge`, `state` and `verify-merge` verify nested
-merges recursively. `accept-head` treats a merge as an ordinary descendant
+bounded by `:max-closure` and `:max-work`. Every v2 commit in the closure is
+recomputed during a single replay, so `merge`, `state` and `verify-merge`
+verify nested merges recursively. Replay is linear in events for linear
+history, but each merge resolves and checkpoints its full state, so the cost
+is O(events + merges x state); `:max-work` fails closed beyond the budget. `accept-head` treats a merge as an ordinary descendant
 once its proof entry carries every parent (`:parent-entries`) and its epoch
 is exactly 1 + max(parent epochs), so a merge naming both equivocating heads
 advances either observer.

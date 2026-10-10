@@ -40,10 +40,11 @@
   value)
 
 (def default-max-epoch-skip
-  "Default bound on how far one merge edge may jump past the path parent's
-  epoch. The other parents' own ancestry is not part of a descent proof, so
-  without a bound a signed merge over a high-epoch parent could push the
-  frontier toward the safe-integer limit in one step."
+  "Default bound on how many epochs one proof may skip in total through merge
+  edges (each edge's jump past its path parent, summed over the path). The
+  other parents' own ancestry is not part of a descent proof, so without a
+  bound signed merges over high-epoch parents could push the frontier toward
+  the safe-integer limit in one acceptance."
   1048576)
 
 (defn- verified-entry [{:keys [root commit] :as entry} verify-entry]
@@ -131,6 +132,15 @@
                  {:root root :child-epoch (:epoch commit)
                   :parent-epoch parent-epoch})))))
 
+(defn- max-epoch-skip-option [opts]
+  (let [value (if (contains? opts :max-epoch-skip)
+                (:max-epoch-skip opts)
+                default-max-epoch-skip)]
+    (when-not (and (integer? value) (not (neg? value)))
+      (reject! :invalid-option "max-epoch-skip must be a non-negative integer"
+               {:max-epoch-skip value}))
+    value))
+
 (defn accept-head
   "Accept a candidate logical head against an optional last-seen frontier.
 
@@ -154,12 +164,22 @@
   as `:merge-parents`, which is how a client that observed equivocation
   converges without a central CAS.
 
+  `:max-epoch-skip` bounds the *total* skip: an accepted distance is at most
+  the path length plus `:max-epoch-skip`. It must be a non-negative integer
+  when given; nil is rejected.
+
+  Descent proof does not prove a merge's other parents belong to the same
+  history: a merge whose other parent comes from an unrelated history that
+  reuses the same `:database-id` (and is signed by an accepted key) is
+  accepted here. A client that will read state through such a merge MUST run
+  `kotobase.engine.merge/verify-merge` over the fetched closure, which
+  rejects unrelated histories (`:unrelated-histories`).
+
   This is a single-writer view: an honest concurrent sibling is reported as
   `:equivocation` (same epoch) or `:not-descendant` until a merge naming both
   is available. Multi-writer clients treat those as \"wait for or compute a
   merge\", not as proof of misbehaviour."
-  [{:keys [last-seen candidate-root path verify-entry max-epoch-skip]
-    :or {max-epoch-skip default-max-epoch-skip}}]
+  [{:keys [last-seen candidate-root path verify-entry] :as opts}]
   (when-not (nonblank-string? candidate-root)
     (reject! :invalid-candidate "candidate root must be a nonblank string"
              {:candidate-root candidate-root}))
@@ -167,7 +187,8 @@
     (reject! :invalid-proof "frontier proof path must be a vector" {:path path}))
   (when-not (fn? verify-entry)
     (reject! :invalid-verifier "frontier acceptance requires verify-entry" {}))
-  (let [last-seen (some-> last-seen frontier)]
+  (let [max-epoch-skip (max-epoch-skip-option opts)
+        last-seen (some-> last-seen frontier)]
     (if (= candidate-root (:logical-commit-root last-seen))
       (do
         (when (seq path)
@@ -228,6 +249,12 @@
                   ;; verified parents), so the epoch distance is fully proven
                   ;; even when the path skips epochs through a merge.
                   (let [distance (- candidate-epoch last-epoch)
+                        _ (when (< (+ (count entries) max-epoch-skip) distance)
+                            (reject! :epoch-skip-too-large
+                                     "proof path skips too many epochs in total"
+                                     {:distance distance
+                                      :path-count (count entries)
+                                      :max-epoch-skip max-epoch-skip}))
                         merges (vec (keep (fn [{:keys [root commit]}]
                                             (when (identity/merge-commit? commit)
                                               {:root root :parents (:parents commit)}))
