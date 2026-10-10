@@ -23,8 +23,11 @@ representations rather than inheriting JVM or JavaScript printer behaviour.
 `kotobase.engine.identity` defines two separate v1 envelopes:
 
 - `kotobase.logical-commit/v1` binds transaction, checkpoint, schema, model and
-  admission-policy roots. V1 is intentionally a zero-or-one-parent chain;
-  multi-parent commits remain invalid until merge semantics are specified.
+  admission-policy roots. V1 is intentionally a zero-or-one-parent chain, and
+  its canonical bytes (hence CIDs) are pinned by a golden test.
+- `kotobase.logical-commit/v2` is used only for merge commits: 2..16 distinct
+  parents in ascending CID order plus `:merge-policy`. A linear commit can
+  never be spelled as v2, so every commit has exactly one identity.
 - `kotobase.physical-publication/v1` binds one logical commit to an
   engine-specific physical root. Repacking or changing engines therefore does
   not move the logical database identity.
@@ -39,6 +42,24 @@ CID/signature-verified, epoch-contiguous parent path reaches that last-seen
 root. It distinguishes rollback, same-epoch equivocation, and a higher but
 unrelated fork. The first observation is deliberately TOFU; IPNS, DNSLink, DID
 documents, S3, and HTTP remain discovery/transport and never become truth.
+
+`kotobase.engine.merge` is the pure, coordinator-free convergence rule
+(`kotobase.merge/v1`, kotobase ADR-2610101200). Given the heads' verified
+ancestor closure, a schema and the injected digest, `merge` returns either a
+fast-forward or one v2 merge commit whose resolution transaction explicitly
+retracts every cardinality-one / `:db/unique` loser and re-asserts every datom
+kept against a concurrent retraction. Argument order, duplicates and ancestor
+heads cannot change the result. The closure must have a single genesis at
+epoch 0, exact epochs, one `:database-id` and one `:schema-root`, and is
+bounded by `:max-closure` and `:max-work`. Every v2 commit in the closure is
+recomputed during a single replay, so `merge`, `state` and `verify-merge`
+verify nested merges recursively. Replay is linear in events for linear
+history, but each merge resolves and checkpoints its full state, so the cost
+is O(events + merges x (state + dots)); `:max-work` charges every such loop
+and fails closed beyond the budget. `accept-head` treats a merge as an ordinary descendant
+once its proof entry carries every parent (`:parent-entries`) and its epoch
+is exactly 1 + max(parent epochs), so a merge naming both equivocating heads
+advances either observer.
 
 `checkpoint` and physical maintenance are deliberately different contracts.
 A checkpoint computes a logical-state commitment and may leave the physical

@@ -186,3 +186,24 @@
 
 (defn checkpoint-string [datoms]
   (canonical-domain-string :checkpoint (checkpoint-datoms datoms)))
+
+(defn checkpoint-datom-fragment
+  "The canonical text of one datom inside `checkpoint-string`. Callers that
+  checkpoint many overlapping states (the merge replay) encode each datom
+  once and assemble with `checkpoint-string-from-fragments`."
+  [datom]
+  (pr-str (canonical-value (select-keys datom [:e :a :v]))))
+
+(def ^:private checkpoint-envelope
+  (let [empty-string (checkpoint-string [])
+        ;; ...[:value [:vector []]]] : split inside the empty datom vector.
+        cut (- (count empty-string) 4)]
+    [(subs empty-string 0 cut) (subs empty-string cut)]))
+
+(defn checkpoint-string-from-fragments
+  "Byte-identical to `checkpoint-string` for datoms whose fragments are given
+  in `logical-datom-key` order."
+  [fragments]
+  (let [[prefix suffix] checkpoint-envelope]
+    (str prefix (apply str (interpose " " fragments)) suffix)))
+

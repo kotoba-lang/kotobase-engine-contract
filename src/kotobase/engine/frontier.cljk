@@ -39,7 +39,15 @@
              {:epoch epoch}))
   value)
 
-(defn- entry-value [{:keys [root commit] :as entry} verify-entry]
+(def default-max-epoch-skip
+  "Default bound on how many epochs one proof may skip in total through merge
+  edges (each edge's jump past its path parent, summed over the path). The
+  other parents' own ancestry is not part of a descent proof, so without a
+  bound signed merges over high-epoch parents could push the frontier toward
+  the safe-integer limit in one acceptance."
+  1048576)
+
+(defn- verified-entry [{:keys [root commit] :as entry} verify-entry]
   (when-not (nonblank-string? root)
     (reject! :invalid-proof "frontier proof entry requires root" {:entry entry}))
   (let [commit (identity/logical-commit commit)]
@@ -49,26 +57,89 @@
                {:root root}))
     {:root root :commit commit}))
 
+(defn- entry-value
+  "Verify a proof entry. A v2 entry must also carry `:parent-entries`, one
+  verified entry per parent in canonical order, all in the merge's database,
+  and the merge epoch must be exactly 1 + max(parent epochs)."
+  [{:keys [parent-entries] :as entry} verify-entry]
+  (let [{:keys [root commit] :as value} (verified-entry entry verify-entry)]
+    (if-not (identity/merge-commit? commit)
+      value
+      (do
+        (when-not (vector? parent-entries)
+          (reject! :invalid-proof
+                   "merge proof entry requires a :parent-entries vector"
+                   {:root root}))
+        (let [parents (mapv #(verified-entry % verify-entry) parent-entries)]
+          (when-not (= (:parents commit) (mapv :root parents))
+            (reject! :invalid-proof
+                     "merge parent entries must match the merge's parents"
+                     {:root root :parents (:parents commit)
+                      :entries (mapv :root parents)}))
+          (doseq [{p :root pc :commit} parents]
+            (when-not (= (:database-id commit) (:database-id pc))
+              (reject! :database-mismatch
+                       "merge parent belongs to another database"
+                       {:root root :parent p :expected (:database-id commit)
+                        :actual (:database-id pc)})))
+          (let [expected (inc (apply max (map (comp :epoch :commit) parents)))]
+            (when-not (= expected (:epoch commit))
+              (reject! :invalid-epoch
+                       "merge epoch must be 1 + max(parent epochs)"
+                       {:root root :epoch (:epoch commit) :expected expected})))
+          (assoc value :parents (into {} (map (juxt :root :commit)) parents)))))))
+
 (defn- candidate-frontier [root commit]
   {:format frontier-format
    :database-id (:database-id commit)
    :logical-commit-root root
    :epoch (:epoch commit)})
 
-(defn- validate-step! [child parent-root parent-epoch database-id]
-  (let [{:keys [root commit]} child]
+(defn- validate-step!
+  "Validate one proof edge from CHILD down to PARENT-ROOT at PARENT-EPOCH.
+  PARENT-COMMIT is the next path entry's commit, or nil at last-seen.
+
+  A v1 child must name exactly that parent and sit at exactly the next epoch.
+  A v2 child must name it among its (already verified) parents, whose entry
+  must agree with the path; its epoch was checked against every parent by
+  `entry-value`, so the edge is exact too, and its skip is bounded."
+  [child parent-root parent-epoch parent-commit database-id max-epoch-skip]
+  (let [{:keys [root commit parents]} child
+        merge? (identity/merge-commit? commit)]
     (when-not (= database-id (:database-id commit))
       (reject! :database-mismatch "commit path crosses database identities"
                {:root root :expected database-id
                 :actual (:database-id commit)}))
-    (when-not (= [parent-root] (:parents commit))
+    (when-not (if merge?
+                (contains? parents parent-root)
+                (= [parent-root] (:parents commit)))
       (reject! :not-descendant "commit path does not reach the last-seen frontier"
                {:root root :expected-parent parent-root
                 :actual-parents (:parents commit)}))
-    (when-not (= (dec (:epoch commit)) parent-epoch)
-      (reject! :noncontiguous-epoch "commit path epochs are not contiguous"
-               {:root root :child-epoch (:epoch commit)
-                :parent-epoch parent-epoch}))))
+    (if merge?
+      (let [declared (get parents parent-root)]
+        (when-not (and (= parent-epoch (:epoch declared))
+                       (or (nil? parent-commit) (= parent-commit declared)))
+          (reject! :invalid-proof
+                   "merge parent entry disagrees with the proof path"
+                   {:root root :parent parent-root}))
+        (when (< max-epoch-skip (- (:epoch commit) parent-epoch 1))
+          (reject! :epoch-skip-too-large "merge edge skips too many epochs"
+                   {:root root :child-epoch (:epoch commit)
+                    :parent-epoch parent-epoch :max-epoch-skip max-epoch-skip})))
+      (when-not (= (dec (:epoch commit)) parent-epoch)
+        (reject! :noncontiguous-epoch "commit path epochs are not contiguous"
+                 {:root root :child-epoch (:epoch commit)
+                  :parent-epoch parent-epoch})))))
+
+(defn- max-epoch-skip-option [opts]
+  (let [value (if (contains? opts :max-epoch-skip)
+                (:max-epoch-skip opts)
+                default-max-epoch-skip)]
+    (when-not (and (integer? value) (not (neg? value)))
+      (reject! :invalid-option "max-epoch-skip must be a non-negative integer"
+               {:max-epoch-skip value}))
+    value))
 
 (defn accept-head
   "Accept a candidate logical head against an optional last-seen frontier.
@@ -80,8 +151,35 @@
   authorized signature; only literal true is accepted.
 
   With no `last-seen`, exactly the verified candidate is accepted as TOFU.
-  Persist the returned `:frontier` before trusting mutable discovery again."
-  [{:keys [last-seen candidate-root path verify-entry]}]
+  Persist the returned `:frontier` before trusting mutable discovery again.
+
+  A v2 merge commit is an ordinary descendant: the path may pass through any
+  one of its parents, but its entry must carry `:parent-entries` for every
+  parent so its epoch is verified as 1 + max(parent epochs); one merge edge
+  may skip at most `:max-epoch-skip` epochs (default
+  `default-max-epoch-skip`). Two different roots at the same epoch remain
+  `:equivocation`, but a merge commit whose parents include the last-seen root
+  advances the frontier. The result reports every merge on the path as
+  `:merges` [{:root :parents}] (candidate first) and the candidate's parents
+  as `:merge-parents`, which is how a client that observed equivocation
+  converges without a central CAS.
+
+  `:max-epoch-skip` bounds the *total* skip: an accepted distance is at most
+  the path length plus `:max-epoch-skip`. It must be a non-negative integer
+  when given; nil is rejected.
+
+  Descent proof does not prove a merge's other parents belong to the same
+  history: a merge whose other parent comes from an unrelated history that
+  reuses the same `:database-id` (and is signed by an accepted key) is
+  accepted here. A client that will read state through such a merge MUST run
+  `kotobase.engine.merge/verify-merge` over the fetched closure, which
+  rejects unrelated histories (`:unrelated-histories`).
+
+  This is a single-writer view: an honest concurrent sibling is reported as
+  `:equivocation` (same epoch) or `:not-descendant` until a merge naming both
+  is available. Multi-writer clients treat those as \"wait for or compute a
+  merge\", not as proof of misbehaviour."
+  [{:keys [last-seen candidate-root path verify-entry] :as opts}]
   (when-not (nonblank-string? candidate-root)
     (reject! :invalid-candidate "candidate root must be a nonblank string"
              {:candidate-root candidate-root}))
@@ -89,7 +187,8 @@
     (reject! :invalid-proof "frontier proof path must be a vector" {:path path}))
   (when-not (fn? verify-entry)
     (reject! :invalid-verifier "frontier acceptance requires verify-entry" {}))
-  (let [last-seen (some-> last-seen frontier)]
+  (let [max-epoch-skip (max-epoch-skip-option opts)
+        last-seen (some-> last-seen frontier)]
     (if (= candidate-root (:logical-commit-root last-seen))
       (do
         (when (seq path)
@@ -142,14 +241,28 @@
                 (do
                   (doseq [[child parent] (partition 2 1 entries)]
                     (validate-step! child (:root parent)
-                                    (get-in parent [:commit :epoch]) database-id))
-                  (let [tail (last entries)]
-                    (validate-step! tail last-root last-epoch database-id))
-                  (let [distance (- candidate-epoch last-epoch)]
-                    (when-not (= distance (count entries))
-                      (reject! :noncontiguous-epoch
-                               "proof length does not match epoch distance"
-                               {:distance distance :path-count (count entries)}))
-                    {:status :advanced :distance distance
-                     :frontier (candidate-frontier candidate-root
-                                                   candidate-commit)}))))))))))
+                                    (get-in parent [:commit :epoch])
+                                    (:commit parent) database-id max-epoch-skip))
+                  (validate-step! (last entries) last-root last-epoch nil
+                                  database-id max-epoch-skip)
+                  ;; Every edge is now exact (v1: +1; v2: 1 + max of all its
+                  ;; verified parents), so the epoch distance is fully proven
+                  ;; even when the path skips epochs through a merge.
+                  (let [distance (- candidate-epoch last-epoch)
+                        _ (when (< (+ (count entries) max-epoch-skip) distance)
+                            (reject! :epoch-skip-too-large
+                                     "proof path skips too many epochs in total"
+                                     {:distance distance
+                                      :path-count (count entries)
+                                      :max-epoch-skip max-epoch-skip}))
+                        merges (vec (keep (fn [{:keys [root commit]}]
+                                            (when (identity/merge-commit? commit)
+                                              {:root root :parents (:parents commit)}))
+                                          entries))]
+                    (cond-> {:status :advanced :distance distance
+                             :frontier (candidate-frontier candidate-root
+                                                           candidate-commit)}
+                      (seq merges)
+                      (assoc :merges merges)
+                      (identity/merge-commit? candidate-commit)
+                      (assoc :merge-parents (:parents candidate-commit)))))))))))))
