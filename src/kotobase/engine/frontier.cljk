@@ -55,17 +55,31 @@
    :logical-commit-root root
    :epoch (:epoch commit)})
 
-(defn- validate-step! [child parent-root parent-epoch database-id]
-  (let [{:keys [root commit]} child]
+(defn- validate-step!
+  "Validate one proof edge from CHILD down to PARENT-ROOT.
+
+  A v1 child must name exactly that parent and sit at exactly the next epoch.
+  A v2 merge child must include PARENT-ROOT among its canonical parents and
+  sit at a strictly greater epoch; its epoch is 1 + max(parent epochs), so an
+  edge through a lower-epoch parent legitimately skips epochs. Whether the
+  merge's epoch and resolution were computed correctly is the job of
+  `kotobase.engine.merge/verify-merge`, not of descent proof."
+  [child parent-root parent-epoch database-id]
+  (let [{:keys [root commit]} child
+        merge? (identity/merge-commit? commit)]
     (when-not (= database-id (:database-id commit))
       (reject! :database-mismatch "commit path crosses database identities"
                {:root root :expected database-id
                 :actual (:database-id commit)}))
-    (when-not (= [parent-root] (:parents commit))
+    (when-not (if merge?
+                (some #{parent-root} (:parents commit))
+                (= [parent-root] (:parents commit)))
       (reject! :not-descendant "commit path does not reach the last-seen frontier"
                {:root root :expected-parent parent-root
                 :actual-parents (:parents commit)}))
-    (when-not (= (dec (:epoch commit)) parent-epoch)
+    (when-not (if merge?
+                (> (:epoch commit) parent-epoch)
+                (= (dec (:epoch commit)) parent-epoch))
       (reject! :noncontiguous-epoch "commit path epochs are not contiguous"
                {:root root :child-epoch (:epoch commit)
                 :parent-epoch parent-epoch}))))
@@ -80,7 +94,13 @@
   authorized signature; only literal true is accepted.
 
   With no `last-seen`, exactly the verified candidate is accepted as TOFU.
-  Persist the returned `:frontier` before trusting mutable discovery again."
+  Persist the returned `:frontier` before trusting mutable discovery again.
+
+  A v2 merge commit is an ordinary descendant: the path may pass through any
+  one of its parents. Two different roots at the same epoch remain
+  `:equivocation`, but a merge commit whose parents include the last-seen root
+  advances the frontier and is reported with `:merge-parents`, which is how a
+  client that observed equivocation converges without a central CAS."
   [{:keys [last-seen candidate-root path verify-entry]}]
   (when-not (nonblank-string? candidate-root)
     (reject! :invalid-candidate "candidate root must be a nonblank string"
@@ -145,11 +165,19 @@
                                     (get-in parent [:commit :epoch]) database-id))
                   (let [tail (last entries)]
                     (validate-step! tail last-root last-epoch database-id))
-                  (let [distance (- candidate-epoch last-epoch)]
-                    (when-not (= distance (count entries))
+                  (let [distance (- candidate-epoch last-epoch)
+                        merges (filterv (comp identity/merge-commit? :commit)
+                                        entries)]
+                    ;; Every v1 edge is exactly one epoch, so an all-v1 path
+                    ;; must be exactly `distance` long. A merge edge may skip
+                    ;; epochs, so only the strictly-decreasing check applies.
+                    (when (and (empty? merges)
+                               (not= distance (count entries)))
                       (reject! :noncontiguous-epoch
                                "proof length does not match epoch distance"
                                {:distance distance :path-count (count entries)}))
-                    {:status :advanced :distance distance
-                     :frontier (candidate-frontier candidate-root
-                                                   candidate-commit)}))))))))))
+                    (cond-> {:status :advanced :distance distance
+                             :frontier (candidate-frontier candidate-root
+                                                           candidate-commit)}
+                      (identity/merge-commit? candidate-commit)
+                      (assoc :merge-parents (:parents candidate-commit)))))))))))))
