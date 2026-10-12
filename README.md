@@ -80,7 +80,7 @@ duration as compaction evidence.
 | immutable sorted runs/compaction | `kotoba-lang/merkle-lsm` |
 | block/ref/large-object provider contract | `kotoba-lang/kotobase-storage` |
 | S3/R2/B2/Filecoin implementations | provider and archive adapters |
-| tenant/auth/HTTP deployment | `network-awai/net-kotobase` |
+| tenant/auth/HTTP deployment | `cloud-kotoba/kotobase-control-plane` |
 
 `kotobase.engine.memory` is a small zero-dependency correctness oracle, not a
 production database. `kotobase.engine.conformance/verify` runs the same semantic
