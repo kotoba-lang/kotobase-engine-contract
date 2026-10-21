@@ -1,5 +1,7 @@
 (ns kotobase.engine.identity-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require #?(:clj [kotoba.test :refer [deftest is testing]]
+               :org.babashka/nbb [kotoba.test :refer [deftest is testing]]
+               :cljs [kotoba.test.cljs :refer-macros [deftest is testing]])
             [kotobase.engine.identity :as identity]))
 
 (def commit
@@ -32,7 +34,7 @@
           (try
             (identity/logical-commit
              (assoc commit :parents ["left" "right"]))
-            (catch js/Error error
+            (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
               (ex-data error)))))))
 
 (deftest signature-domain-binds-authority-and-key
@@ -50,6 +52,6 @@
            (:type
             (try
               (identity/logical-commit (assoc commit :physical-root "wrong-layer"))
-              (catch js/Error error
+              (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
                 (ex-data error))))))))
 
