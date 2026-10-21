@@ -108,5 +108,61 @@
       },
       "url": "https://github.com/kotoba-lang/kotobase-engine-prolly/pull/5"
     }
-  ]
+  ],
+  "repository-after-archive": {
+    "id": "R_kgDOTsNGSg",
+    "databaseId": 1321420362,
+    "nameWithOwner": "kotoba-lang/kotobase-engine-prolly",
+    "isPrivate": false,
+    "isArchived": true,
+    "pushedAt": "2026-09-24T10:45:54Z",
+    "defaultBranchRef": {
+      "name": "main",
+      "target": {
+        "oid": "f7c5bd195e5dbe536f0ddc5dc596b8c261431324"
+      }
+    },
+    "heads": {
+      "totalCount": 2,
+      "nodes": [
+        {
+          "name": "agent/noble-drop-kotobase-engine-prolly",
+          "target": {
+            "oid": "9d100381c302747e1069dfcde8fbaf2ed0327d03"
+          }
+        },
+        {
+          "name": "main",
+          "target": {
+            "oid": "f7c5bd195e5dbe536f0ddc5dc596b8c261431324"
+          }
+        }
+      ]
+    },
+    "tags": {
+      "totalCount": 0,
+      "nodes": []
+    },
+    "openPRs": {
+      "totalCount": 0,
+      "nodes": []
+    },
+    "allPRs": {
+      "totalCount": 5
+    },
+    "openIssues": {
+      "totalCount": 0
+    },
+    "releases": {
+      "totalCount": 0
+    }
+  },
+  "archive-readback": {
+    "repository": "kotoba-lang/kotobase-engine-prolly",
+    "action": "archive-readback",
+    "archived": true,
+    "source-and-refs-unchanged": true,
+    "qualified-main": "87213760c7394271301423c08a4ec1106370527e",
+    "at": "2026-10-21T21:36:54.924146+00:00"
+  }
 }

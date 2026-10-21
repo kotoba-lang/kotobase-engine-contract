@@ -1,7 +1,8 @@
 # ADR-0001: Independent database engine sources under the neutral contract owner
 
-Status: source placement accepted; merged-main qualification and any archive
-remain pending. Tracking: [JUN-267](https://linear.app/kotobalabs/issue/JUN-267).
+Status: source placement accepted and qualified on merged main; three source
+repositories archived with readbacks. Tracking:
+[JUN-267](https://linear.app/kotobalabs/issue/JUN-267).
 
 The existing `kotobase-engine-contract` owner now co-locates three opt-in source
 projects. Its production `src`, `deps.edn` and `nbb.edn` remain byte-identical to
@@ -99,3 +100,23 @@ No repository is archived/deleted by this source commit. Retirement requires
 actual merged-main gates, public CLI/source origins, immediate remote/local
 rechecks and explicit archive readbacks. Complete source/history retention does
 not turn a rejected historical experiment into an admitted implementation.
+
+## Merged-main and archive readback
+
+[Source PR #11](https://github.com/kotoba-lang/kotobase-engine-contract/pull/11)
+merged as `87213760c7394271301423c08a4ec1106370527e`. The published combined
+host command completed successfully on that exact main: four JVM projects with
+95 tests / 425 assertions, SCI and compiled Node each100 tests / 374 assertions,
+three SCI and two compiled asynchronous fixtures, and all three declared lint
+profiles with zero errors/warnings. All three public Kotoba CLI origins resolve
+inside this owner; exact source IDs/aliases remain source-only.
+
+Immediate remote/local guards verified the original checkouts, linked LSM
+worktree, branches, stashes, all83 refs and all239 protected consumer-pin
+repositories. The three child repositories were then archived, with their IDs,
+defaults, heads, tags and source timestamps unchanged. No repository was deleted.
+The dated receipt binds the actual main verification and each GitHub readback;
+complete bundle restore/fsck and the recovery refusal controls pass after archive.
+All four repositories' Actions remain disabled, and the source main has zero
+Actions runs. Local qualification is recorded separately from CI. The full-org
+review continues; Amu and other execution foundations remain independent.

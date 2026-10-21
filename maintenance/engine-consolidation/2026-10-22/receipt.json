@@ -292,9 +292,9 @@
       ],
       "original-worktree-metadata": "worktree <github>/kotoba-lang/kotobase-engine\nHEAD a1ff23ade4f4ceca520311a99961e28fe6619f59\ndetached",
       "github-snapshot": "maintenance/engine-consolidation/2026-10-22/github/kotobase-engine.json",
-      "github-sha256": "eed5944a3dd9f9484127d275161adf9f072526f017677ba6464b9897c78df1a5",
-      "archived": false,
-      "archive-status": "pending-main-verification",
+      "github-sha256": "40dbc7a910b5c4ccd061286165abfca5a010025aaddc35024fa92444bb8573e8",
+      "archived": true,
+      "archive-status": "archived-after-main-verification",
       "linked-worktree-bundle-heads": []
     },
     {
@@ -480,9 +480,9 @@
       ],
       "original-worktree-metadata": "worktree <github>/kotoba-lang/kotobase-engine-lsm\nHEAD 219ce22f96a4ed5836fe3f7b848b7c626e2aec0b\ndetached\n\nworktree <github>/wt/hermes/jun-218-lsm9\nHEAD 7d4a4371e5e47ce51038f73feb3861f9ef2dde06\nbranch refs/heads/pq-jun-218-lsm9",
       "github-snapshot": "maintenance/engine-consolidation/2026-10-22/github/kotobase-engine-lsm.json",
-      "github-sha256": "6e34be171c7141b2c7e2f969041acd669dae2890bbba2b29cb3bbce8aab0c17e",
-      "archived": false,
-      "archive-status": "pending-main-verification",
+      "github-sha256": "adb1f0733f0886eaaf12e449f76e266594b5c99f039ee7c6ad51b51feb254040",
+      "archived": true,
+      "archive-status": "archived-after-main-verification",
       "linked-worktree-bundle-heads": [
         {
           "ref": "worktrees/jun-218-lsm9/HEAD",
@@ -613,13 +613,107 @@
       ],
       "original-worktree-metadata": "worktree <github>/kotoba-lang/kotobase-engine-prolly\nHEAD f7c5bd195e5dbe536f0ddc5dc596b8c261431324\ndetached",
       "github-snapshot": "maintenance/engine-consolidation/2026-10-22/github/kotobase-engine-prolly.json",
-      "github-sha256": "c368992fa13547e2b93bf2308374e03a0b46ff807dd78e4d395a6b045a6799f7",
-      "archived": false,
-      "archive-status": "pending-main-verification",
+      "github-sha256": "51ccad47b77a2a59c69867d5bec66508c9f2df7255b6f0d750a495bb8debf98a",
+      "archived": true,
+      "archive-status": "archived-after-main-verification",
       "linked-worktree-bundle-heads": []
     }
   ],
   "protected-original-pin-holds": 239,
   "repository-deletions": 0,
-  "status": "Source/history preserved. Main/host/CLI/fresh-state qualification precedes archive; rejected historical experiments are not admitted."
+  "status": "Three opt-in database engine sources archived after merged-main qualification; full histories/original working trees retained. Rejected experiments are not admitted. No deletion or default eligibility change.",
+  "main-verification": {
+    "commit": "87213760c7394271301423c08a4ec1106370527e",
+    "reviewed-head": "87c66df11dcf74b4d28303996403d2f380fe9f6d",
+    "tree": "4f62bdd6cddc27f13d60df4df6cdc02a526ee391",
+    "pull-request": "https://github.com/kotoba-lang/kotobase-engine-contract/pull/11",
+    "JVM": {
+      "projects": 4,
+      "tests": 95,
+      "assertions": 425,
+      "failures": 0,
+      "errors": 0
+    },
+    "compiled-CLJS": {
+      "projects": 4,
+      "unit-tests": 100,
+      "unit-assertions": 374,
+      "async-provider-fixtures": 2,
+      "failures": 0
+    },
+    "SCI": {
+      "unit-tests": 100,
+      "unit-assertions": 374,
+      "async-provider-fixtures": 3,
+      "failures": 0
+    },
+    "lint": {
+      "projects": 3,
+      "errors": 0,
+      "warnings": 0
+    },
+    "public-source-CLI": {
+      "IDs": 3,
+      "aliases": 6,
+      "exactLookups": 9,
+      "admission": "not-granted"
+    },
+    "source-origins": [
+      {
+        "id": "kotoba.kotobase.engine.legacy",
+        "admission": "not-granted",
+        "contract": "src/kotobase/engine/contract.cljk",
+        "source": "implementations/kotoba.kotobase.engine.legacy/src/kotobase/engine.cljs.cljk"
+      },
+      {
+        "id": "kotoba.kotobase.engine.lsm",
+        "admission": "not-granted",
+        "contract": "src/kotobase/engine/contract.cljk",
+        "source": "implementations/kotoba.kotobase.engine.lsm/src/kotobase/engine/lsm.cljk"
+      },
+      {
+        "id": "kotoba.kotobase.engine.prolly",
+        "admission": "not-granted",
+        "contract": "src/kotobase/engine/contract.cljk",
+        "source": "implementations/kotoba.kotobase.engine.prolly/src/kotobase/engine/prolly.cljk"
+      }
+    ],
+    "source-preservation-rechecked": true,
+    "production-default-eligibility-unchanged": true,
+    "complete-bundles-restored-and-fsck": 3,
+    "refs": 83,
+    "linked-worktree-HEAD-aliases": 1,
+    "historical-PRs": 24,
+    "original-file-hashes": 56,
+    "original-pin-holds-unchanged": 239,
+    "CI": "Actions remain disabled; local main qualification only",
+    "native-live-and-deployment-qualification": "separate; not claimed",
+    "rejected-historical-experiments": "complete source/history retained; no migrated/admitted API or format claim"
+  },
+  "Actions-readback": {
+    "kotobase-engine-contract": {
+      "enabled": false
+    },
+    "kotobase-engine": {
+      "enabled": false
+    },
+    "kotobase-engine-lsm": {
+      "enabled": false
+    },
+    "kotobase-engine-prolly": {
+      "enabled": false
+    },
+    "source-main-runs": {
+      "head_sha": "87213760c7394271301423c08a4ec1106370527e",
+      "total_count": 0
+    }
+  },
+  "post-archive-recovery": {
+    "complete-histories": 3,
+    "refs": 83,
+    "historical-PRs": 24,
+    "original-file-hashes": 56,
+    "restore-fsck": "passed",
+    "negative-controls-refused": 6
+  }
 }
