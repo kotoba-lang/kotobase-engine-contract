@@ -1,5 +1,7 @@
 (ns kotobase.engine.surface-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require #?(:clj [kotoba.test :refer [deftest is]]
+               :org.babashka/nbb [kotoba.test :refer [deftest is]]
+               :cljs [kotoba.test.cljs :refer-macros [deftest is]])
             [kotobase.engine.surface :as surface]))
 
 (deftest physical-semantics-and-extensions-have-distinct-owners
@@ -21,7 +23,7 @@
 
 (deftest duplicated-operation-ownership-is-rejected
   (is (thrown-with-msg?
-       js/Error
+       #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
        #"exactly one owning layer"
        (surface/validate-operation-layers
         {:engine-state #{:scan} :projection #{:scan}}))))

@@ -1,32 +1,52 @@
-name: CI
-
+name: engine source and host contracts
 on:
   push:
     branches: [main]
   pull_request:
 
 jobs:
-  test:
+  source-and-hosts:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: DeLaGuardo/setup-clojure@13.4
-        with:
-          cli: latest
-      - run: clojure -M:test
-      - run: clojure -M:lint
-
-  test-cljs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+        with: { distribution: temurin, java-version: '21' }
       - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with: { cli: latest }
+      - uses: actions/checkout@v4
         with:
-          node-version: "20"
-      - run: npm install
-      - run: npm run test:cljs
-
+          repository: kotoba-lang/kotoba
+          ref: f0ecb24b722664b825ab89992e9cc98c37ecaaf0
+          path: .ci/kotoba
+      - uses: actions/checkout@v4
+        with:
+          repository: kotoba-lang/org-babashka-nbb
+          ref: 1675e6aab65d5a99e37840cc5012bc2eca6f4a07
+          path: .ci/org-babashka-nbb
+      - run: npm ci --ignore-scripts --omit=dev
+        working-directory: .ci/org-babashka-nbb
+      - run: npm ci --ignore-scripts
+      - name: Source, dependency and recovery contracts
+        env:
+          KBB_ENGINE: ${{ github.workspace }}/.ci/org-babashka-nbb/cli.js
+          KBB_HOME: ${{ github.workspace }}/.ci/kotoba
+          KBB_NO_STDLIB: '1'
+          KBB_NO_NPM: '1'
+        run: |
+          node scripts/check-engine-sources.mjs
+          .ci/kotoba/bin/kbb --backend sci scripts/check-engine-dependencies.cljk
+          node scripts/test-engine-sources.mjs "$RUNNER_TEMP/source-negative"
+          node scripts/check-engine-history.mjs "$RUNNER_TEMP/history"
+          node scripts/test-engine-history.mjs "$RUNNER_TEMP/history-negative"
+      - name: Isolated JVM, SCI, compiled Node and public CLI source gates
+        run: >-
+          python3 scripts/test-engine-hosts.py "$RUNNER_TEMP/engine-hosts"
+          --kotoba "$GITHUB_WORKSPACE/.ci/kotoba"
+          --engine "$GITHUB_WORKSPACE/.ci/org-babashka-nbb/cli.js"
+      - name: Compiled reporter failure and error control
+        run: >-
+          python3 scripts/test-engine-compiled.py "$RUNNER_TEMP/compiled-negative"
+          --project owner --plant-failure

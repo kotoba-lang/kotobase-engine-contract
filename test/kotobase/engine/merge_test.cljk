@@ -1,5 +1,7 @@
 (ns kotobase.engine.merge-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require #?(:clj [kotoba.test :refer [deftest is testing]]
+               :org.babashka/nbb [kotoba.test :refer [deftest is testing]]
+               :cljs [kotoba.test.cljs :refer-macros [deftest is testing]])
             [kotobase.engine.canonical :as canonical]
             [kotobase.engine.frontier :as frontier]
             [kotobase.engine.identity :as identity]
@@ -7,10 +9,14 @@
 
 ;; Node's SHA-256 stands in for the injected CID digest. Only determinism and
 ;; collision resistance matter to these tests, not the multibase spelling.
-(def ^:private crypto (js/require "crypto"))
+#?(:cljs (def ^:private crypto (js/require "crypto")))
 
 (defn- digest [s]
-  (str "bafy" (.digest (.update (.createHash crypto "sha256") s) "hex")))
+  (str "bafy"
+       #?(:clj (apply str (map #(format "%02x" (bit-and 255 %))
+                              (.digest (java.security.MessageDigest/getInstance "SHA-256")
+                                       (.getBytes s "UTF-8"))))
+          :cljs (.digest (.update (.createHash crypto "sha256") s) "hex"))))
 
 (def schema
   {:doc/status {:db/cardinality :db.cardinality/one}
@@ -23,17 +29,19 @@
   (try
     (thunk)
     nil
-    (catch js/Error error
+    (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
       (:problem (ex-data error)))))
 
 (defn- add*
   "Install a v1 commit. OVERRIDES replaces commit fields after the honest
   defaults are computed, so tests can forge epochs or provenance."
   [graph parents tx overrides]
-  (let [epoch (if (seq parents)
-                (inc (apply max (map #(get-in graph [% :commit :epoch])
-                                     parents)))
-                0)
+  (let [epoch (if (contains? overrides :epoch)
+                (:epoch overrides)
+                (if (seq parents)
+                  (inc (apply max (map #(get-in graph [% :commit :epoch])
+                                       parents)))
+                  0))
         tx-root (digest (canonical/transaction-string tx))
         commit (into {:format identity/logical-commit-format
                       :database-id "tenant/db"
@@ -116,7 +124,7 @@
                   :merge-policy identity/merge-policy
                   :parents ["logical-6a" "logical-6b"])
         invalid #(:type (try (identity/logical-commit %) nil
-                             (catch js/Error e (ex-data e))))]
+                             (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) e (ex-data e))))]
     (is (= v2 (identity/logical-commit v2)))
     (is (re-find #"kotobase.logical-commit/v2" (identity/logical-commit-string v2)))
     (testing "unsorted, duplicate, single or missing-policy parents are rejected"
@@ -534,7 +542,7 @@
   (testing "v2 parents must be ASCII CID strings"
     (is (= :kotobase.engine/invalid-identity
            (:type (try (identity/canonical-parents ["bafyé" "bafya"]) nil
-                       (catch js/Error e (ex-data e))))))))
+                       (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) e (ex-data e))))))))
 
 (deftest re-assertions-keep-the-original-stamp
   ;; Finding 4 (probe 2): a merge re-assertion used to get the merge's own
@@ -619,10 +627,10 @@
     ;; wall-clock budget, so a slow CI host does not make it flaky.
     (let [timed (fn [n]
                   (let [[graph root] (chain n)
-                        t0 (js/Date.now)
+                        t0 #?(:clj (quot (System/nanoTime) 1000000) :cljs (js/Date.now))
                         s (merge/state {:graph graph :root root :schema schema
                                         :digest digest})]
-                    [(- (js/Date.now) t0) s]))
+                    [(- #?(:clj (quot (System/nanoTime) 1000000) :cljs (js/Date.now)) t0) s]))
           [small _] (timed 1000)
           [large s] (timed 4000)]
       (is (= #{["e" :doc/status "v3999"]}
@@ -794,14 +802,14 @@
       ;; copying closures per merge would make this ratio grow with n.
       (let [small (work-of (ladder 250))
             large (work-of [graph root])]
-        (is (< large (* 9/2 small))
+        (is (< large (* (/ 9 2) small))
             (str "250 merges: " small " units, 1000 merges: " large " units"))))))
 
 (deftest options-and-heads-fail-closed
   (is (= :invalid-heads (problem-of #(run-merge {} ["bafyé" "bafya"]))))
   (is (= :kotobase.merge/rejected
          (:type (try (run-merge {} ["bafyé" "bafya"]) nil
-                     (catch js/Error e (ex-data e))))))
+                     (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) e (ex-data e))))))
   (let [[graph root] (chain 3)]
     (is (= :invalid-option
            (problem-of #(merge/state {:graph graph :root root :schema schema

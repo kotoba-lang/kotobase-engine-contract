@@ -139,3 +139,13 @@ kbb -M:lint
 npm install
 npm run test:cljs
 ```
+
+
+## Opt-in engine source projects
+
+Three independently selected implementations are co-located under
+`implementations/`; the neutral default dependency graph does not include them.
+`node scripts/engine-sources.mjs list` returns exact source IDs and preserved
+repository/coordinate aliases, with no runtime admission. See
+[ADR-0001](docs/adr/0001-engine-source-monorepo.md) for project boundaries,
+branch/recovery decisions and reproducible JVM/SCI/compiled host gates.

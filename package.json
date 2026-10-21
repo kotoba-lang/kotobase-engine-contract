@@ -5,6 +5,7 @@
     "test:cljs": "kbb --backend sci --classpath \"$(kbb -Spath)\" test/run.cljk"
   },
   "devDependencies": {
-    "nbb": "^1.4.208"
+    "nbb": "^1.4.208",
+    "@noble/hashes": "2.0.1"
   }
 }

@@ -1,5 +1,7 @@
 (ns kotobase.engine.canonical-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require #?(:clj [kotoba.test :refer [deftest is testing]]
+               :org.babashka/nbb [kotoba.test :refer [deftest is testing]]
+               :cljs [kotoba.test.cljs :refer-macros [deftest is testing]])
             [kotobase.engine.canonical :as canonical]))
 
 (defrecord HostRecord [value])
@@ -8,7 +10,7 @@
   (try
     (thunk)
     nil
-    (catch js/Error error
+    (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
       (:problem (ex-data error)))))
 
 (deftest logical-identities-are-versioned-and-domain-separated
@@ -72,5 +74,5 @@
          (:type
           (try
             (canonical/canonical-domain-string :typo [])
-            (catch js/Error error
+            (catch #?(:clj clojure.lang.ExceptionInfo :cljs js/Error) error
               (ex-data error)))))))

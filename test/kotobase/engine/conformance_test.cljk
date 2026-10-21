@@ -1,5 +1,7 @@
 (ns kotobase.engine.conformance-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require #?(:clj [kotoba.test :refer [deftest is]]
+               :org.babashka/nbb [kotoba.test :refer [deftest is]]
+               :cljs [kotoba.test.cljs :refer-macros [deftest is]])
             [kotobase.engine.conformance :as conformance]
             [kotobase.engine.memory :as memory]))
 
