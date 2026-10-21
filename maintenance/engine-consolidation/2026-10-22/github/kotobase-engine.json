@@ -184,5 +184,79 @@
       },
       "url": "https://github.com/kotoba-lang/kotobase-engine/pull/10"
     }
-  ]
+  ],
+  "repository-after-archive": {
+    "id": "R_kgDOTj1FOg",
+    "databaseId": 1312638266,
+    "nameWithOwner": "kotoba-lang/kotobase-engine",
+    "isPrivate": false,
+    "isArchived": true,
+    "pushedAt": "2026-10-10T06:26:46Z",
+    "defaultBranchRef": {
+      "name": "main",
+      "target": {
+        "oid": "a1ff23ade4f4ceca520311a99961e28fe6619f59"
+      }
+    },
+    "heads": {
+      "totalCount": 5,
+      "nodes": [
+        {
+          "name": "agent/datomic-admin-tuple",
+          "target": {
+            "oid": "b9a6042b55a44fe2783442a3ba0d19b4b32c456c"
+          }
+        },
+        {
+          "name": "agent/noble-drop-kotobase-engine",
+          "target": {
+            "oid": "a0183134a9b3075985a8f381f386a46982b691c2"
+          }
+        },
+        {
+          "name": "claude/engine-multi-parent-merge",
+          "target": {
+            "oid": "c625f9eb9d9c54ea727619d0ce37bb41cdf9965b"
+          }
+        },
+        {
+          "name": "codex/fold-async-reads",
+          "target": {
+            "oid": "cf62e124dcae6d3dd816582c9cff4b510badcd64"
+          }
+        },
+        {
+          "name": "main",
+          "target": {
+            "oid": "a1ff23ade4f4ceca520311a99961e28fe6619f59"
+          }
+        }
+      ]
+    },
+    "tags": {
+      "totalCount": 0,
+      "nodes": []
+    },
+    "openPRs": {
+      "totalCount": 0,
+      "nodes": []
+    },
+    "allPRs": {
+      "totalCount": 10
+    },
+    "openIssues": {
+      "totalCount": 0
+    },
+    "releases": {
+      "totalCount": 0
+    }
+  },
+  "archive-readback": {
+    "repository": "kotoba-lang/kotobase-engine",
+    "action": "archive-readback",
+    "archived": true,
+    "source-and-refs-unchanged": true,
+    "qualified-main": "87213760c7394271301423c08a4ec1106370527e",
+    "at": "2026-10-21T21:36:50.306367+00:00"
+  }
 }

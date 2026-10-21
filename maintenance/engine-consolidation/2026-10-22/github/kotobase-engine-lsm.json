@@ -158,5 +158,67 @@
       "mergeCommit": null,
       "url": "https://github.com/kotoba-lang/kotobase-engine-lsm/pull/9"
     }
-  ]
+  ],
+  "repository-after-archive": {
+    "id": "R_kgDOTsNG0w",
+    "databaseId": 1321420499,
+    "nameWithOwner": "kotoba-lang/kotobase-engine-lsm",
+    "isPrivate": false,
+    "isArchived": true,
+    "pushedAt": "2026-09-24T10:21:53Z",
+    "defaultBranchRef": {
+      "name": "main",
+      "target": {
+        "oid": "219ce22f96a4ed5836fe3f7b848b7c626e2aec0b"
+      }
+    },
+    "heads": {
+      "totalCount": 3,
+      "nodes": [
+        {
+          "name": "agent/physical-maintenance",
+          "target": {
+            "oid": "2ca8a389f4f39a8a3ad7ccea69aea06e51d62c1e"
+          }
+        },
+        {
+          "name": "agent/s3-main-performance-260804",
+          "target": {
+            "oid": "7d4a4371e5e47ce51038f73feb3861f9ef2dde06"
+          }
+        },
+        {
+          "name": "main",
+          "target": {
+            "oid": "219ce22f96a4ed5836fe3f7b848b7c626e2aec0b"
+          }
+        }
+      ]
+    },
+    "tags": {
+      "totalCount": 0,
+      "nodes": []
+    },
+    "openPRs": {
+      "totalCount": 0,
+      "nodes": []
+    },
+    "allPRs": {
+      "totalCount": 9
+    },
+    "openIssues": {
+      "totalCount": 0
+    },
+    "releases": {
+      "totalCount": 0
+    }
+  },
+  "archive-readback": {
+    "repository": "kotoba-lang/kotobase-engine-lsm",
+    "action": "archive-readback",
+    "archived": true,
+    "source-and-refs-unchanged": true,
+    "qualified-main": "87213760c7394271301423c08a4ec1106370527e",
+    "at": "2026-10-21T21:36:52.614235+00:00"
+  }
 }
