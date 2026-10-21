@@ -1,7 +1,7 @@
 {
   "schema": "kotoba.engine-source-local-verification.v1",
   "owner-base": "53d10eea8a09ba7d9f466f9f57cbc21e8314df45",
-  "status": "individual gates passed; combined reproducible runner executing; merged-main qualification pending",
+  "status": "all individual and combined public host/CLI gates passed; merged-main qualification pending",
   "JVM": {
     "projects": 4,
     "tests": 95,
@@ -58,5 +58,26 @@
   "Actions": "remain disabled; no CI claim",
   "archive-count": 0,
   "delete-count": 0,
-  "native-live-deployment-and-default-eligibility": "unchanged; no new qualification"
+  "native-live-deployment-and-default-eligibility": "unchanged; no new qualification",
+  "combined-public-host-command": "passed for owner/legacy/lsm/prolly",
+  "public-CLI-origins": [
+    {
+      "id": "kotoba.kotobase.engine.legacy",
+      "admission": "not-granted",
+      "contract": "src/kotobase/engine/contract.cljk",
+      "source": "implementations/kotoba.kotobase.engine.legacy/src/kotobase/engine.cljs.cljk"
+    },
+    {
+      "id": "kotoba.kotobase.engine.lsm",
+      "admission": "not-granted",
+      "contract": "src/kotobase/engine/contract.cljk",
+      "source": "implementations/kotoba.kotobase.engine.lsm/src/kotobase/engine/lsm.cljk"
+    },
+    {
+      "id": "kotoba.kotobase.engine.prolly",
+      "admission": "not-granted",
+      "contract": "src/kotobase/engine/contract.cljk",
+      "source": "implementations/kotoba.kotobase.engine.prolly/src/kotobase/engine/prolly.cljk"
+    }
+  ]
 }
